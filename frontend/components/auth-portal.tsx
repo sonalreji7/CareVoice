@@ -84,14 +84,14 @@ export function AuthScreen() {
       <p className="mt-5 max-w-xl text-lg leading-8 text-[#5d7078]">CareVoice Relay gives patients, caregivers, clinicians, and administrators a focused workspace with only the information they need.</p>
     </section>
     <form className="card p-6 md:p-8" onSubmit={submit}>
-      <p className="eyebrow">{signup ? "Create a patient account" : "Welcome back"}</p>
+      <p className="eyebrow">{signup ? "Create an account" : "Welcome back"}</p>
       <h2 className="mt-2 text-2xl font-bold">{signup ? "Set up your private space" : "Sign in securely"}</h2>
       {signup && <><label className="mt-5 block"><span className="label">Your name</span><input className="field" required value={name} onChange={(event) => setName(event.target.value)} /></label><p className="mt-4 text-sm leading-6 text-[#5d7078]">Caregiver, clinician, and administrator access is provisioned by an administrator.</p></>}
       <label className="mt-5 block"><span className="label">Email address</span><input className="field" required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
       <label className="mt-4 block"><span className="label">Password</span><input className="field" required minLength={8} type="password" autoComplete={signup ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
       {notice && <p className="mt-4 rounded-lg bg-[#fff4e7] p-3 text-sm text-[#704414]" role="alert">{notice}</p>}
-      <button className="btn btn-primary mt-6 w-full" disabled={busy}>{busy ? "Please wait…" : signup ? "Create patient account" : "Sign in"}</button>
-      <button type="button" className="btn btn-quiet mt-4 w-full" onClick={() => { setSignup(!signup); setNotice(""); }}>{signup ? "Already have an account? Sign in" : "Need a patient account? Create one"}</button>
+      <button className="btn btn-primary mt-6 w-full" disabled={busy}>{busy ? "Please wait…" : signup ? "Create account" : "Sign in"}</button>
+      <button type="button" className="btn btn-quiet mt-4 w-full" onClick={() => { setSignup(!signup); setNotice(""); }}>{signup ? "Already have an account? Sign in" : "Need an account? Create one"}</button>
     </form>
   </div></div>;
 }
@@ -236,13 +236,14 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [stage, setStage] = useState<"compose" | "clarification" | "confirmation">("compose");
+  const [stage, setStage] = useState<"compose" | "clarification">("compose");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [clarificationAnswer, setClarificationAnswer] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rebuildingId, setRebuildingId] = useState("");
   const canContinue = Boolean(patientId && message.trim() && consent);
 
-  async function prepareDraft(answers: Partial<Record<ClarificationField, string>> = {}, skipClarification = false) {
+  async function prepareDraft(answers: Partial<Record<ClarificationField, string>> = {}) {
     setBusy(true);
     setNotice("");
     try {
@@ -257,7 +258,8 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
       setDraft(next);
       setEngine(next.mode);
       setClarificationAnswer("");
-      setStage(next.clarification && !skipClarification ? "clarification" : "confirmation");
+      if (next.clarification) setStage("clarification");
+      else await share(next);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "We could not prepare the structured handover.");
     } finally {
@@ -265,15 +267,14 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
     }
   }
 
-  async function share() {
-    if (!draft) return;
+  async function share(activeDraft: Draft) {
     setBusy(true);
     setNotice("");
     try {
       const response = await fetch(apiUrl("/api/care-updates"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ draftId: draft.draftId, patientId, originalMessage: draft.originalMessage, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: {} }),
+        body: JSON.stringify({ draftId: activeDraft.draftId, patientId, originalMessage: activeDraft.originalMessage, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: {} }),
       });
       const body = await response.json() as { update?: CareUpdate; error?: string };
       if (!response.ok || !body.update) throw new Error(body.error || "We could not share the update.");
@@ -301,28 +302,52 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
     if (canContinue) void prepareDraft();
   }
 
+  async function transcribe(recording: Blob) {
+    const response = await fetch(apiUrl("/api/transcribe"), {
+      method: "POST",
+      headers: { "Content-Type": recording.type, Authorization: `Bearer ${session.access_token}` },
+      body: recording,
+    });
+    const body = await response.json() as { transcript?: string; error?: string };
+    if (!response.ok || !body.transcript) throw new Error(body.error || "We could not transcribe that recording. You can type your update instead.");
+    return body.transcript;
+  }
+
+  async function rebuildHandover(updateId: string) {
+    setRebuildingId(updateId);
+    setNotice("");
+    try {
+      const response = await fetch(apiUrl(`/api/care-updates/${updateId}/rebuild-handover`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const body = await response.json() as { update?: CareUpdate; mode?: Exclude<Engine, null>; error?: string };
+      if (!response.ok || !body.update) throw new Error(body.error || "We could not rebuild the structured handover.");
+      setEngine(body.mode || engine || "unavailable");
+      setUpdates((current) => current.map((item) => item.id === updateId ? body.update as CareUpdate : item));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "We could not rebuild the structured handover.");
+    } finally { setRebuildingId(""); }
+  }
+
   return <div className="mt-8 grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
     <section className="space-y-5"><div className="card p-6"><p className="eyebrow">{role === "caregiver" ? "Person in your care" : "Your quick summary"}</p><h2 className="mt-2 text-xl font-bold">{role === "caregiver" ? linkedName : "Recent care context"}</h2><p className="mt-3 leading-6 text-[#5d7078]">{quickSummary || latestReportedChange(updates[0]) || "No care summary has been provided yet."}</p></div></section>
     <section className="card p-6">
-      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your original words remain available for review. You will confirm before anything is shared.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Review structured handover"}</button></form>}
-      {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => setStage("confirmation")} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
-      {stage === "confirmation" && draft && <FinalConfirmation draft={draft} busy={busy} onBack={() => { setDraft(null); setStage("compose"); }} onConfirm={() => void share()} />}
+      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your original words remain available for review with the structured handover.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Share update"}</button></form>}
+      {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => void share(draft)} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
     </section>
-    <section className="card p-6 lg:col-span-2"><h2 className="text-xl font-bold">Your updates</h2><div className="mt-4 space-y-4">{updates.length ? updates.map((item) => <UpdateCard key={item.id} item={item} />) : <p className="text-[#5d7078]">No updates have been shared yet.</p>}</div></section>
+    <section className="card p-6 lg:col-span-2"><h2 className="text-xl font-bold">Your updates</h2><div className="mt-4 space-y-4">{updates.length ? updates.map((item) => <UpdateCard key={item.id} item={item} onRebuild={() => void rebuildHandover(item.id)} rebuilding={rebuildingId === item.id} />) : <p className="text-[#5d7078]">No updates have been shared yet.</p>}</div></section>
   </div>;
 }
 
 function ClarificationStep({ clarification, answer, setAnswer, busy, onSkip, onContinue }: { clarification: Clarification | null; answer: string; setAnswer: (value: string) => void; busy: boolean; onSkip: () => void; onContinue: () => void }) {
   if (!clarification) return null;
-  return <div><p className="eyebrow">Optional clarification</p><h2 className="mt-2 text-2xl font-bold">One detail could make this handover clearer</h2><p className="mt-3 text-[#5d7078]">{clarification.question}</p><label className="mt-5 block"><span className="label">Your answer</span><textarea className="field min-h-28" maxLength={1000} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Add only what you want the care team to know." /></label><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onSkip}>Skip and review</button><button type="button" className="btn btn-primary" disabled={busy || !answer.trim()} onClick={onContinue}>{busy ? "Preparing…" : "Continue"}</button></div></div>;
+  return <div><p className="eyebrow">Optional clarification</p><h2 className="mt-2 text-2xl font-bold">One detail could make this handover clearer</h2><p className="mt-3 text-[#5d7078]">{clarification.question}</p><label className="mt-5 block"><span className="label">Your answer</span><textarea className="field min-h-28" maxLength={1000} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Add only what you want the care team to know." /></label><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onSkip}>Skip and share</button><button type="button" className="btn btn-primary" disabled={busy || !answer.trim()} onClick={onContinue}>{busy ? "Preparing…" : "Continue"}</button></div></div>;
 }
 
-function FinalConfirmation({ draft, busy, onBack, onConfirm }: { draft: Draft; busy: boolean; onBack: () => void; onConfirm: () => void }) {
-  return <div><p className="eyebrow">Final confirmation</p><h2 className="mt-2 text-2xl font-bold">Review before sharing</h2><p className="mt-2 text-[#5d7078]">Confirm the original wording and the evidence-backed handover before it is shared with the care team.</p><div className="mt-5 rounded-xl border border-[#cfe2dd] p-4"><p className="label">Your words</p><p className="whitespace-pre-wrap leading-6">{draft.originalMessage}</p></div><HandoverPreview summary={draft.extraction} /><PriorityExplanation reasons={draft.priorityReasons} /><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onBack}>Edit original wording</button><button type="button" className="btn btn-primary" disabled={busy} onClick={onConfirm}>{busy ? "Sharing…" : "Confirm and share"}</button></div></div>;
-}
-
-function UpdateCard({ item }: { item: CareUpdate }) {
-  return <article className="rounded-xl border border-[#cfe2dd] p-4"><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} /><details className="mt-3"><summary className="cursor-pointer font-bold text-[#0d766e]">See original words</summary><p className="mt-2 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>;
+function UpdateCard({ item, onRebuild, rebuilding }: { item: CareUpdate; onRebuild?: () => void; rebuilding?: boolean }) {
+  const unavailable = !asAvailableExtraction(item.agent_summary);
+  return <article className="rounded-xl border border-[#cfe2dd] p-4"><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} />{unavailable && onRebuild && <button type="button" className="btn btn-secondary mt-3" disabled={rebuilding} onClick={onRebuild}>{rebuilding ? "Building handover…" : "Create structured handover"}</button>}<details className="mt-3"><summary className="cursor-pointer font-bold text-[#0d766e]">See original words</summary><p className="mt-2 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>;
 }
 
 function ClinicianUpdates({ updates, session, setUpdates }: { updates: CareUpdate[]; session: Session; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void }) {

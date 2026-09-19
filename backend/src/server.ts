@@ -47,6 +47,10 @@ type StoredDraft = {
 const drafts = new Map<string, StoredDraft>();
 const draftRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const shareRateLimiter = createFixedWindowRateLimiter(10, 60_000);
+const audioRateLimiter = createFixedWindowRateLimiter(6, 60_000);
+const rebuildRateLimiter = createFixedWindowRateLimiter(6, 60_000);
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
+const supportedAudioTypes = new Set(["audio/webm", "audio/ogg", "audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]);
 const draftRequestSchema = z.object({
   patientId: z.string().uuid(),
   originalMessage: z.unknown(),
@@ -66,6 +70,10 @@ const transitionRequestSchema = z.object({
 }).strict();
 
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000" }));
+app.use(express.raw({
+  type: (request) => request.headers["content-type"]?.split(";", 1)[0].startsWith("audio/") ?? false,
+  limit: "10mb",
+}));
 app.use(express.json({ limit: "100kb" }));
 
 function respondError(response: express.Response, status: number, error: string) {
@@ -121,6 +129,16 @@ async function authorizeClinicianAccess(client: SupabaseClient, actor: Actor, up
   return !assignmentError && assignment ? update : null;
 }
 
+async function authorizeHandoverRebuild(client: SupabaseClient, actor: Actor, updateId: string) {
+  const { data: update, error } = await client
+    .from("care_updates")
+    .select("id, patient_id, original_message")
+    .eq("id", updateId)
+    .maybeSingle();
+  if (error || !update || !await authorizeSubmission(client, actor, update.patient_id)) return null;
+  return update;
+}
+
 async function requireAuthenticatedUser(request: express.Request, response: express.Response): Promise<User | null> {
   if (!authClient) {
     respondError(response, 503, "Authentication service is not configured.");
@@ -154,6 +172,49 @@ app.get("/health", (_, response) => response.json({
 // This route used to expose extraction separately from persistence. Keeping a
 // clear failure prevents an old browser bundle from continuing an unsafe flow.
 app.post("/api/extract", (_, response) => respondError(response, 410, "This endpoint has been replaced by the secure care-update workflow."));
+
+app.post("/api/transcribe", async (request, response) => {
+  const user = await requireAuthenticatedUser(request, response);
+  if (!user) return;
+  const rate = audioRateLimiter.check(user.id);
+  if (!rate.allowed) {
+    response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
+    respondError(response, 429, "Please wait a moment before recording again.");
+    return;
+  }
+  if (!isAgentConfigured()) {
+    respondError(response, 503, "Voice transcription is not configured. You can type your update instead.");
+    return;
+  }
+  const contentType = request.headers["content-type"]?.split(";", 1)[0] || "";
+  if (!supportedAudioTypes.has(contentType) || !Buffer.isBuffer(request.body) || request.body.length === 0 || request.body.length > MAX_AUDIO_BYTES) {
+    respondError(response, 400, "Use a supported audio recording up to 10 MB, or type your update instead.");
+    return;
+  }
+  try {
+    const extension = contentType === "audio/ogg" ? "ogg" : contentType === "audio/wav" ? "wav" : contentType === "audio/mpeg" ? "mp3" : contentType === "audio/mp4" || contentType === "audio/x-m4a" ? "m4a" : "webm";
+    const form = new FormData();
+    form.set("model", process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe");
+    const audioBytes = new Uint8Array(request.body.length);
+    audioBytes.set(request.body);
+    form.set("file", new Blob([audioBytes], { type: contentType }), `carevoice-recording.${extension}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const transcriptionResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form,
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+    const result = await transcriptionResponse.json() as { text?: unknown };
+    if (!transcriptionResponse.ok || typeof result.text !== "string" || !result.text.trim()) {
+      throw new Error("Voice transcription was unavailable.");
+    }
+    response.json({ transcript: result.text.trim().slice(0, 10_000) });
+  } catch {
+    respondError(response, 422, "We could not transcribe that recording. You can type your update instead.");
+  }
+});
 
 app.post("/api/care-update-drafts", async (request, response) => {
   const user = await requireAuthenticatedUser(request, response);
@@ -246,6 +307,37 @@ app.post("/api/care-updates", async (request, response) => {
   } catch (error) {
     const message = error instanceof z.ZodError ? error.message : "We could not share this update. Please try again.";
     respondError(response, error instanceof z.ZodError ? 400 : 422, message);
+  }
+});
+
+app.post("/api/care-updates/:updateId/rebuild-handover", async (request, response) => {
+  const user = await requireAuthenticatedUser(request, response);
+  const client = configuredService(response);
+  if (!user || !client) return;
+  const rate = rebuildRateLimiter.check(user.id);
+  if (!rate.allowed) {
+    response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
+    respondError(response, 429, "Please wait a moment before rebuilding another handover.");
+    return;
+  }
+  try {
+    const actor = await loadActor(client, user.id);
+    const update = actor ? await authorizeHandoverRebuild(client, actor, request.params.updateId) : null;
+    if (!actor || !update) {
+      respondError(response, 403, "You are not authorised to rebuild this handover.");
+      return;
+    }
+    const result = await withTimeout(extractUpdate(update.original_message), 12_000);
+    const { data, error } = await client.rpc("refresh_care_update_handover_from_server", {
+      p_update_id: update.id,
+      p_actor_id: actor.id,
+      p_agent_summary: result.extraction,
+    });
+    const refreshed = Array.isArray(data) ? data[0] : data;
+    if (error || !refreshed) throw new Error("The structured handover could not be refreshed.");
+    response.json({ update: refreshed, mode: result.mode });
+  } catch {
+    respondError(response, 422, "We could not refresh this structured handover. You can continue to review the original message.");
   }
 });
 

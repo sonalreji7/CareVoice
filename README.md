@@ -4,8 +4,8 @@ CareVoice Relay is a hackathon prototype for structured, reviewable palliative-c
 
 ## What it does
 
-- Gives patients and caregivers a private update workflow with typed input and optional, editable browser voice recognition.
-- Requires a final review before an update is shared. A user can optionally answer one non-clinical clarification at a time, or skip it.
+- Gives patients and caregivers a private update workflow with typed input and optional, editable voice recording/transcription.
+- Shares after the explicit consent checkbox. A user can optionally answer one non-clinical clarification at a time, or skip it.
 - Creates a handover only from complete sentences in the submitted words. Every displayed field is duplicated in source evidence; no model-written clinical prose is shown.
 - Shows `Structured handover unavailable — review the original message.` when extraction cannot be verified. This safe demo-mode fallback does not invent facts.
 - Uses deterministic priority rules only: an explicit caregiver callback request or the clinician-owned “normal daily care cannot continue” rule. Urgent-sounding text alone does not create priority.
@@ -45,8 +45,8 @@ Do not put real credentials, shared demo passwords, or real patient information 
 ## Hackathon walkthrough
 
 1. In the administrator pane, assign the fictional clinician to the fictional patient and confirm the caregiver link.
-2. Sign in as the seeded caregiver. Enter a short update, optionally select **Request a priority callback**, and choose **Review structured handover**.
-3. Review the original words, the evidence-backed fields, and the deterministic priority explanation. Select **Confirm and share**.
+2. Sign in as the seeded caregiver. Enter a short update, optionally record voice input, select **Request a priority callback**, and select **Share update**.
+3. If shown, answer or skip the one optional clarification. The update is then sent with its evidence-backed fields and deterministic priority explanation.
 4. Sign in as the assigned clinician. The update appears in the review queue even when no priority rule applied. Expand **Additional information** to see the original words, then select **Acknowledge**.
 5. Select **Close** after acknowledgement to demonstrate the enforced lifecycle and event audit.
 
