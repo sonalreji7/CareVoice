@@ -278,6 +278,15 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
       const body = await response.json() as { update?: CareUpdate; error?: string };
       if (!response.ok || !body.update) throw new Error(body.error || "We could not share the update.");
       setUpdates((current) => [body.update as CareUpdate, ...current]);
+      // Re-read through the browser's RLS-scoped SELECT after the trusted save.
+      // This keeps the visible history aligned with the persisted record rather
+      // than relying only on an optimistic client-side append.
+      const { data: persistedUpdates, error: refreshError } = await supabase()
+        .from("care_updates")
+        .select("*")
+        .eq("patient_id", patientId)
+        .order("created_at", { ascending: false });
+      if (!refreshError && persistedUpdates) setUpdates(persistedUpdates as CareUpdate[]);
       setMessage(""); setConsent(false); setPriority(false); setDraft(null); setStage("compose");
       setNotice(body.update.priority_reasons?.length ? "Your update was shared and includes a deterministic priority review request." : "Your update has been shared with the care team.");
     } catch (error) {

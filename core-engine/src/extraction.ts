@@ -24,6 +24,34 @@ function isCompleteSourceSentence(source: string, quote: string) {
   return sourceSentences(source).includes(quote.trim());
 }
 
+function normaliseSentence(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function canonicalSourceSentence(source: string, quote: string) {
+  const normalisedQuote = normaliseSentence(quote);
+  if (!normalisedQuote) return null;
+  const sentences = sourceSentences(source);
+  const exact = sentences.find((sentence) => normaliseSentence(sentence) === normalisedQuote);
+  if (exact) return exact;
+
+  // A model can identify a direct phrase such as "Since yesterday" without
+  // retaining the rest of its source sentence. Accept that only when there is
+  // one unambiguous source sentence, then display the full original sentence
+  // (including any negation) rather than the model's shortened wording.
+  const containing = sentences.filter((sentence) => normaliseSentence(sentence).includes(normalisedQuote));
+  return containing.length === 1 ? containing[0] : null;
+}
+
+function canonicalQuoteArray(source: string, quotes: string[]) {
+  const canonical = quotes.map((quote) => canonicalSourceSentence(source, quote));
+  return canonical.every((quote): quote is string => Boolean(quote)) ? canonical : null;
+}
+
 function sameQuotes(left: string[], right: string[]) {
   return left.length === right.length && left.every((quote, index) => quote === right[index]);
 }
@@ -56,6 +84,46 @@ export function isSafeGroundedExtraction(message: string, candidate: unknown): c
   ].filter((quote): quote is string => Boolean(quote));
 
   return quotes.every((quote) => isCompleteSourceSentence(message, quote));
+}
+
+/**
+ * The model may preserve a source sentence while changing only whitespace or
+ * punctuation. Before accepting it, replace each quote with the exact source
+ * sentence and rebuild evidence deterministically. Fragments and paraphrases
+ * still fail because they do not equal a complete source sentence.
+ */
+export function canonicalizeExtraction(message: string, candidate: unknown): Extraction | null {
+  const parsed = extractionSchema.safeParse(candidate);
+  if (!parsed.success) return null;
+  const output = parsed.data;
+  const change = output.change === null ? null : canonicalSourceSentence(message, output.change);
+  const timing = output.timing === "not stated" ? "not stated" : canonicalSourceSentence(message, output.timing);
+  const comfort = canonicalQuoteArray(message, output.comfort_or_daily_impact);
+  const help = canonicalQuoteArray(message, output.help_requested);
+  const medication = canonicalQuoteArray(message, output.medication_or_care_question);
+  if ((output.change !== null && !change) || !timing || !comfort || !help || !medication) return null;
+
+  const missing: ClarificationField[] = [];
+  if (timing === "not stated") missing.push("timing");
+  if (!comfort.length) missing.push("comfort_or_daily_impact");
+  if (!help.length) missing.push("help_requested");
+  return {
+    handover_available: true,
+    change,
+    timing,
+    comfort_or_daily_impact: comfort,
+    help_requested: help,
+    medication_or_care_question: medication,
+    source_evidence: {
+      change,
+      timing: timing === "not stated" ? null : timing,
+      comfort_or_daily_impact: comfort,
+      help_requested: help,
+      medication_or_care_question: medication,
+    },
+    missing_information: missing,
+    safety_notice: SAFETY_NOTICE,
+  };
 }
 
 export function unavailableExtraction(): CareUpdateExtraction {
@@ -108,7 +176,7 @@ For change, timing, comfort_or_daily_impact, help_requested, and medication_or_c
 missing_information may contain only: timing, comfort_or_daily_impact, help_requested. safety_notice must be exactly: ${SAFETY_NOTICE}
 `.trim();
 
-function createCareUpdateAgent() {
+export function createCareUpdateAgent() {
   return new Agent({
     name: "CareVoice evidence-backed handover extractor",
     model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
@@ -128,9 +196,9 @@ export async function extractUpdate(message: string): Promise<{ extraction: Care
   // a deployment adds separately approved observability controls.
   const runner = new Runner({ tracingDisabled: true });
   const result = await runner.run(createCareUpdateAgent(), message, { maxTurns: 1 });
-  const extraction = extractionSchema.safeParse(result.finalOutput);
-  if (!extraction.success || !isSafeGroundedExtraction(message, extraction.data)) {
+  const extraction = canonicalizeExtraction(message, result.finalOutput);
+  if (!extraction || !isSafeGroundedExtraction(message, extraction)) {
     return { extraction: unavailableExtraction(), mode: "unavailable" };
   }
-  return { extraction: extraction.data, mode: "agent" };
+  return { extraction, mode: "agent" };
 }

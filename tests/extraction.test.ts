@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildStructuredHandover,
+  canonicalizeExtraction,
   isSafeGroundedExtraction,
   nextClarification,
   unavailableExtraction,
@@ -59,6 +60,34 @@ test("rejects dropped negations, invented facts, and altered evidence", () => {
     ...candidate,
     source_evidence: { ...candidate.source_evidence, change: "No pain yesterday." },
   }), false);
+});
+
+test("canonicalizes punctuation-only formatting differences to exact source evidence", () => {
+  const source = "No pain today. Please call tomorrow.";
+  const candidate = {
+    ...groundedCandidate(),
+    change: "no pain today",
+    help_requested: ["Please call tomorrow"],
+    source_evidence: { ...groundedCandidate().source_evidence, change: "different evidence", help_requested: ["different evidence"] },
+  };
+  const canonical = canonicalizeExtraction(source, candidate);
+  assert.equal(canonical?.change, "No pain today.");
+  assert.deepEqual(canonical?.help_requested, ["Please call tomorrow."]);
+  assert.equal(isSafeGroundedExtraction(source, canonical), true);
+  assert.equal(canonicalizeExtraction(source, { ...candidate, change: "No fever today" }), null);
+});
+
+test("expands an unambiguous direct phrase to its complete source sentence", () => {
+  const source = "Since yesterday, no pain was reported. The caregiver asks whether to call tomorrow.";
+  const candidate = {
+    ...groundedCandidate(),
+    change: "Since yesterday, no pain was reported.",
+    timing: "Since yesterday",
+    source_evidence: { ...groundedCandidate().source_evidence, change: "Since yesterday, no pain was reported.", timing: "Since yesterday" },
+  };
+  const canonical = canonicalizeExtraction(source, candidate);
+  assert.equal(canonical?.timing, "Since yesterday, no pain was reported.");
+  assert.equal(canonicalizeExtraction("Pain today. Pain tomorrow.", { ...candidate, change: "Pain today.", timing: "Pain", help_requested: [], source_evidence: { ...candidate.source_evidence, change: "Pain today.", timing: "Pain", help_requested: [] } }), null);
 });
 
 test("keeps mixed-language, vague, medication, urgent, and prompt-like fictional text grounded", () => {
