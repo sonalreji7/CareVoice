@@ -1,0 +1,6 @@
+{
+  "name": "@carevoice/database", "version": "0.1.0", "private": true, "type": "module",
+  "exports": { "./store": "./src/store.ts" },
+  "dependencies": { "@carevoice/core-engine": "*" },
+  "scripts": { "typecheck": "tsc --noEmit -p ../tsconfig.json" }
+}

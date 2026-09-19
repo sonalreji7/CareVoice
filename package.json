@@ -1,0 +1,32 @@
+{
+  "name": "carevoice-relay-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend",
+    "database",
+    "core-engine"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c cyan,green \"npm run dev --workspace=@carevoice/backend\" \"npm run dev --workspace=@carevoice/frontend\"",
+    "build": "npm run build --workspace=@carevoice/frontend",
+    "start": "npm run start --workspace=@carevoice/backend",
+    "lint": "npm run lint --workspace=@carevoice/frontend",
+    "typecheck": "npm run typecheck --workspace=@carevoice/core-engine && npm run typecheck --workspace=@carevoice/database && npm run typecheck --workspace=@carevoice/backend && npm run typecheck --workspace=@carevoice/frontend",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "concurrently": "^9.1.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

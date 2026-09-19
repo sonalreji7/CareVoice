@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "esnext", "moduleResolution": "bundler", "strict": true,
+    "noEmit": true, "skipLibCheck": true, "baseUrl": ".",
+    "paths": { "@carevoice/core-engine/*": ["core-engine/src/*"], "@carevoice/database/*": ["database/src/*"] }
+  },
+  "include": ["backend/**/*.ts", "database/**/*.ts", "core-engine/**/*.ts", "tests/**/*.ts"]
+}

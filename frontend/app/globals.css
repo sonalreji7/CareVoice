@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root { --ink: #173640; --muted: #5d7078; --foam: #eff8f6; --sea: #0d766e; --line: #cfe2dd; --warm: #fff8ed; }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: #f7fbfa; font-family: Arial, Helvetica, sans-serif; }
+button, input, textarea, select { font: inherit; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #9edbd1; outline-offset: 2px; }
+.shell { max-width: 1180px; margin: auto; padding: 0 20px; }
+.card { background: white; border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 10px 30px rgba(23,54,64,.06); }
+.field { width: 100%; border: 1px solid #a8c3bd; border-radius: 11px; padding: 12px 14px; color: var(--ink); background: white; }
+.field:focus { border-color: var(--sea); outline: 3px solid #d8f1ec; }
+.btn { border: 0; border-radius: 11px; padding: 12px 17px; font-weight: 700; cursor: pointer; transition: .15s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn-primary { color: white; background: var(--sea); }
+.btn-secondary { color: var(--ink); background: #e9f4f1; }
+.btn-quiet { color: var(--sea); background: transparent; padding-inline: 4px; }
+.badge { display: inline-flex; align-items: center; border-radius: 100px; padding: 5px 10px; font-size: 13px; font-weight: 700; }
+.status-new { color: #245a6c; background: #e2f3f8; }.status-priority { color: #745200; background: #fff0c7; }.status-ack { color: #23614b; background: #d9f2e7; }.status-closed { color: #56666c; background: #edf1f1; }
+.notice { border-radius: 12px; padding: 13px 15px; background: #fff4e7; border: 1px solid #f4c997; color: #6f4211; }
+.demo-notice { background: #edf5ff; border-color: #b7d6f8; color: #194e79; }
+.service-banner { background: #fff4e7; border-top: 1px solid #f4c997; color: #603c14; font-size: 14px; line-height: 1.5; padding: 9px 0; }
+.label { font-size: 14px; font-weight: 700; margin-bottom: 7px; display: block; }
+.eyebrow { color: #0d766e; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; font-size: 12px; }
