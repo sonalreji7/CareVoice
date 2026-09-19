@@ -107,6 +107,7 @@ export function CarePortal() {
   const [loading, setLoading] = useState(true);
   const [engine, setEngine] = useState<Engine>(null);
   const [secureWritesConfigured, setSecureWritesConfigured] = useState<boolean | null>(null);
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -185,7 +186,7 @@ export function CarePortal() {
     }
     void loadWorkspace();
     return () => { live = false; };
-  }, [session]);
+  }, [session, workspaceVersion]);
 
   if (!session) return <AuthScreen />;
   if (loading) return <div className="shell py-20 text-center text-[#5d7078]">Loading your private workspace…</div>;
@@ -193,7 +194,7 @@ export function CarePortal() {
 
   const heading = profile.role === "admin" ? "User and access management" : profile.role === "clinician" ? "Executive review of authorised updates" : "Your private care updates";
   return <div className="shell py-9 md:py-12">
-    <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="eyebrow">{roleLabels[profile.role]} workspace</p><h1 className="mt-2 text-4xl font-bold">Hello, {profile.display_name}</h1><p className="mt-2 text-lg text-[#5d7078]">{heading}</p></div><button className="btn btn-secondary" onClick={() => void supabase().auth.signOut()}>Sign out</button></div>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="eyebrow">{roleLabels[profile.role]} workspace</p><h1 className="mt-2 text-4xl font-bold">Hello, {profile.display_name}</h1><p className="mt-2 text-lg text-[#5d7078]">{heading}</p></div><div className="flex flex-wrap gap-3"><button className="btn btn-secondary" onClick={() => setWorkspaceVersion((current) => current + 1)}>Refresh updates</button><button className="btn btn-secondary" onClick={() => void supabase().auth.signOut()}>Sign out</button></div></div>
     {notice && <p className="notice mt-5" role="status">{notice}</p>}
     {profile.role !== "admin" && <DemoModeNotice engine={engine} />}
     {profile.role !== "admin" && <SecureWritesNotice configured={secureWritesConfigured} />}
