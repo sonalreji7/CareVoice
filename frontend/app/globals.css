@@ -2,14 +2,16 @@
 
 :root { --ink: #173640; --muted: #5d7078; --foam: #eff8f6; --sea: #0d766e; --line: #cfe2dd; --warm: #fff8ed; }
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: #f7fbfa; font-family: Arial, Helvetica, sans-serif; }
+html { min-width: 320px; -webkit-text-size-adjust: 100%; }
+body { min-width: 320px; margin: 0; overflow-x: hidden; color: var(--ink); background: #f7fbfa; font-family: Arial, Helvetica, sans-serif; }
+p, dd { overflow-wrap: anywhere; }
 button, input, textarea, select { font: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #9edbd1; outline-offset: 2px; }
-.shell { max-width: 1180px; margin: auto; padding: 0 20px; }
+.shell { width: min(100%, 1180px); margin: auto; padding-inline: clamp(16px, 4vw, 32px); }
 .card { background: white; border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 10px 30px rgba(23,54,64,.06); }
-.field { width: 100%; border: 1px solid #a8c3bd; border-radius: 11px; padding: 12px 14px; color: var(--ink); background: white; }
+.field { width: 100%; min-height: 46px; border: 1px solid #a8c3bd; border-radius: 11px; padding: 12px 14px; color: var(--ink); background: white; font-size: 16px; }
 .field:focus { border-color: var(--sea); outline: 3px solid #d8f1ec; }
-.btn { border: 0; border-radius: 11px; padding: 12px 17px; font-weight: 700; cursor: pointer; transition: .15s ease; }
+.btn { min-height: 44px; border: 0; border-radius: 11px; padding: 12px 17px; font-weight: 700; cursor: pointer; touch-action: manipulation; transition: .15s ease; }
 .btn:hover { transform: translateY(-1px); }
 .btn-primary { color: white; background: var(--sea); }
 .btn-secondary { color: var(--ink); background: #e9f4f1; }
@@ -21,3 +23,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .service-banner { background: #fff4e7; border-top: 1px solid #f4c997; color: #603c14; font-size: 14px; line-height: 1.5; padding: 9px 0; }
 .label { font-size: 14px; font-weight: 700; margin-bottom: 7px; display: block; }
 .eyebrow { color: #0d766e; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; font-size: 12px; }
+
+@media (max-width: 639px) {
+  .card { border-radius: 16px; }
+  .card[class*="p-6"], .card[class*="p-5"] { padding: 1rem; }
+  .service-banner { font-size: 13px; }
+  .mobile-actions { display: grid; grid-template-columns: 1fr; }
+  .mobile-actions > .btn { width: 100%; }
+  .mobile-table-scroll { margin-inline: -1rem; padding-inline: 1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
