@@ -2,6 +2,18 @@
 
 This guide lets a reviewer verify the core workflow from a fresh local setup using fictional data only. CareVoice Relay is a deployed care-communication application; it is not a diagnostic, triage, or emergency service.
 
+## Live evaluator access
+
+The deployed application is available at [carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/). These public accounts contain fictional data only and have no administrator access:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Patient | `patient@carevoice.test` | `CareVoiceDemo!2026` |
+| Caregiver | `caregiver@carevoice.test` | `CareVoiceDemo!2026` |
+| Clinician | `clinician@carevoice.test` | `CareVoiceDemo!2026` |
+
+Do not enter real personal or health information. Use the caregiver account to create a fictional update and the clinician account to review it.
+
 ## What to assess
 
 The project addresses a specific handover problem: a caregiver can describe a change in plain language, but a clinician needs a quick, reviewable view without losing the caregiver's original meaning. The system's answer is constrained organisation, not diagnosis.

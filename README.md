@@ -59,6 +59,18 @@ The project also includes a clearly labelled deterministic fictional demo mode. 
 
 The live application is available at **[carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/)**. A reproducible fictional demo can also be run locally using the steps below.
 
+### Public evaluator credentials
+
+Use these **fictional public demo accounts** to evaluate the deployed workflow. They have no administrator access and must never be used with real personal or health information.
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Patient | `patient@carevoice.test` | `CareVoiceDemo!2026` |
+| Caregiver | `caregiver@carevoice.test` | `CareVoiceDemo!2026` |
+| Clinician | `clinician@carevoice.test` | `CareVoiceDemo!2026` |
+
+For the clearest walkthrough, sign in as the caregiver to prepare and share a fictional update, then sign in as the clinician to review it.
+
 ### Demo / Pitch Video
 
 The live deployment above is the primary product demonstration. It supports the caregiver-to-clinician workflow described in this repository.
