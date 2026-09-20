@@ -14,6 +14,20 @@ CareVoice Relay is a hackathon prototype for structured, reviewable palliative-c
 
 The interface keeps persistent **Not an emergency service** and **Prototype only** notices. Voice recognition requires an acknowledgement before it starts and states that speech processing is provided by the browser or its speech provider; CareVoice does not store audio.
 
+## Evaluator guide
+
+This repository is designed to be judged from evidence rather than promises. Start with the architecture below, then use these paths to verify the core claims.
+
+| Claim | Evidence in this repository |
+| --- | --- |
+| The model cannot author a clinical handover | [`core-engine/src/extraction.ts`](core-engine/src/extraction.ts) gives the model only source-sentence IDs and tags, then materialises display text on the server. |
+| Invented facts and lost negations are rejected | [`tests/extraction.test.ts`](tests/extraction.test.ts) covers invented facts, altered evidence, negations, prompt-like text, and mixed-language updates. |
+| A user must review before an update is persisted | [`tests/workflow-contract.test.ts`](tests/workflow-contract.test.ts) verifies the explicit confirmation step. |
+| Browser clients cannot directly write care updates | [`database/supabase/migrations/202609200009_server_owned_care_updates.sql`](database/supabase/migrations/202609200009_server_owned_care_updates.sql) revokes browser writes and exposes service-role-only RPCs. |
+| Access and feedback are assignment-scoped | [`tests/security-migration.test.ts`](tests/security-migration.test.ts) verifies clinician assignment, server-only feedback, and restricted database permissions. |
+
+For a reproducible fictional demo, see [`docs/JUDGE-GUIDE.md`](docs/JUDGE-GUIDE.md). For the deliberate product and safety trade-offs, see [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
 ## Architecture
 
 ```
