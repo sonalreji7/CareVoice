@@ -67,17 +67,17 @@ The live deployment above is the primary product demonstration. It supports the 
 
 The live application can be viewed at [carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/). The following screenshots use fictional data only.
 
-### Secure, role-aware entry point
-
-![CareVoice Relay secure sign-in screen](docs/screenshots/01-secure-sign-in.png)
-
-The sign-in screen introduces the care-communication purpose and directs people to the appropriate emergency channel when needed.
-
 ### Caregiver workspace
 
 ![Caregiver workspace for a fictional patient](docs/screenshots/02-caregiver-workspace.png)
 
 Patients and caregivers can submit ordinary-language care updates, optionally use editable voice input, and explicitly consent before the handover is prepared.
+
+### Review before sharing
+
+![Review-before-sharing screen with source-backed handover](docs/screenshots/review-before-sharing.png)
+
+Before anything is sent, the caregiver sees the complete submitted wording beside the AI-assisted organisation. The **Confirm and share** action is separate from preparing the handover.
 
 ### Assigned clinician review queue
 
