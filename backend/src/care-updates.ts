@@ -44,7 +44,7 @@ export function composeSubmissionMessage(original: unknown, answers: unknown = {
 
 type WindowEntry = { count: number; startedAt: number };
 
-/** A small in-process guard for a hackathon server; use shared storage when horizontally scaled. */
+/** A small in-process guard; use shared storage when horizontally scaled. */
 export function createFixedWindowRateLimiter(limit: number, windowMs: number, now = () => Date.now()) {
   const entries = new Map<string, WindowEntry>();
   return {
