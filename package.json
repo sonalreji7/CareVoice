@@ -14,7 +14,8 @@
     "start": "npm run start --workspace=@carevoice/backend",
     "lint": "npm run lint --workspace=@carevoice/frontend",
     "typecheck": "npm run typecheck --workspace=@carevoice/core-engine && npm run typecheck --workspace=@carevoice/database && npm run typecheck --workspace=@carevoice/backend && npm run typecheck --workspace=@carevoice/frontend",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "seed:demo": "node scripts/seed-demo-users.mjs"
   },
   "dependencies": {
     "concurrently": "^9.1.0",

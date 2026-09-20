@@ -1,4 +1,4 @@
-import type { PriorityInput } from "./contracts";
+import type { PriorityInput } from "./contracts.js";
 
 const normalDailyCareCannotContinue = /(?:\b(?:cannot|can['’]?t|unable to|not able to)\s+(?:continue|provide)\s+(?:normal\s+)?(?:daily\s+)?care\b|\b(?:normal\s+)?daily\s+care\s+(?:cannot|can['’]?t|is not able to)\s+continue\b)/i;
 

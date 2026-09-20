@@ -7,11 +7,13 @@ import { z } from "zod";
 import {
   extractUpdate,
   isAgentConfigured,
+  isDemoMode,
   nextClarification,
   summarizePatientExperience,
-} from "@carevoice/core-engine/extraction";
-import type { CareUpdateExtraction, PatientExperienceSummary } from "@carevoice/core-engine/contracts";
-import { evaluatePriority } from "@carevoice/core-engine/priority";
+} from "../../core-engine/src/extraction.js";
+import type { CareUpdateExtraction, PatientExperienceSummary } from "../../core-engine/src/contracts.js";
+import type { HandoverMode } from "../../core-engine/src/extraction.js";
+import { evaluatePriority } from "../../core-engine/src/priority.js";
 import {
   clarificationAnswersSchema,
   composeSubmissionMessage,
@@ -41,9 +43,16 @@ type StoredDraft = {
   caregiverCallbackRequested: boolean;
   extraction: CareUpdateExtraction;
   priorityReasons: string[];
-  mode: "unavailable" | "agent";
+  mode: ClientEngine;
   expiresAt: number;
 };
+
+type ClientEngine = "openai-agents-sdk" | "demo" | "unavailable";
+
+function clientEngine(mode: HandoverMode): ClientEngine {
+  if (mode === "agent") return "openai-agents-sdk";
+  return mode;
+}
 
 const drafts = new Map<string, StoredDraft>();
 const draftRateLimiter = createFixedWindowRateLimiter(6, 60_000);
@@ -205,7 +214,7 @@ function pruneExpiredDrafts() {
 app.get("/health", (_, response) => response.json({
   status: "ok",
   service: "carevoice-backend",
-  extractionEngine: isAgentConfigured() ? "openai-agents-sdk" : "unavailable",
+  extractionEngine: isDemoMode() ? "demo" : isAgentConfigured() ? "openai-agents-sdk" : "unavailable",
   secureWritesConfigured: Boolean(serviceClient),
 }));
 
@@ -324,7 +333,7 @@ app.post("/api/care-update-drafts", async (request, response) => {
       caregiverCallbackRequested: callbackRequested,
       extraction: result.extraction,
       priorityReasons: evaluatePriority({ authorRole: actor.role as "patient" | "caregiver", caregiverRequestedCallback: callbackRequested, message: submission.message }),
-      mode: result.mode,
+      mode: clientEngine(result.mode),
       expiresAt: Date.now() + 10 * 60_000,
     };
     pruneExpiredDrafts();
@@ -415,7 +424,7 @@ app.post("/api/care-updates/:updateId/rebuild-handover", async (request, respons
     });
     const refreshed = Array.isArray(data) ? data[0] : data;
     if (error || !refreshed) throw new Error("The structured handover could not be refreshed.");
-    response.json({ update: refreshed, mode: result.mode });
+    response.json({ update: refreshed, mode: clientEngine(result.mode) });
   } catch {
     respondError(response, 422, "We could not refresh this structured handover. You can continue to review the original message.");
   }

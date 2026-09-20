@@ -24,6 +24,57 @@ core-engine/    Evidence-backed extraction contract and deterministic priority r
 tests/          Unit, static security, and fictional evaluation coverage
 ```
 
+### System architecture
+
+```mermaid
+flowchart LR
+  Caregiver[Patient or caregiver] --> Web[Next.js web app]
+  Clinician[Assigned clinician] --> Web
+  Admin[Administrator] --> Web
+
+  Web -->|sign-in and scoped reads| Auth[Supabase Auth + RLS]
+  Web -->|authenticated draft, share, review requests| API[Express trusted backend]
+
+  API -->|verify token, role, and patient assignment| Auth
+  API --> Engine[CareVoice core engine]
+  Engine -->|numbered source sentences| Model[OpenAI constrained selector]
+  Model -->|sentence IDs and allowed tags only| Engine
+  Engine -->|validated exact-source handover| API
+
+  API -->|service-role RPC after authorization| DB[(Supabase Postgres)]
+  DB --> Rules[Database priority rules + audit events]
+  Rules --> Queue[Assigned clinician review queue]
+  Queue --> Clinician
+
+  Web -. optional voice recording .-> API
+  API -. transcription only .-> OpenAIAudio[OpenAI transcription API]
+```
+
+### Care-update data flow
+
+```mermaid
+flowchart TD
+  A[Caregiver writes or dictates an update] --> B[Consent and optional priority-callback request]
+  B --> C[Backend authenticates user, rate-limits, and verifies assignment]
+  C --> D[Original words plus optional clarification are kept together]
+  D --> E[Split into numbered source sentences]
+  E --> F{Extraction mode}
+  F -->|OpenAI mode| G[Model selects sentence IDs and allowed tags]
+  F -->|Fictional demo mode| H[Deterministic exact-sentence tags]
+  G --> I[Server validates every selected sentence against original text]
+  H --> I
+  I --> J[Caregiver reviews original words and organised handover]
+  J -->|Edit| A
+  J -->|Explicit confirm| K[Trusted server-side save]
+  K --> L[Database computes permitted priority reasons and records audit event]
+  L --> M[Only assigned clinician sees update]
+  M --> N[Acknowledge or close update; optionally record quality feedback]
+
+  I -->|Invalid or unavailable| O[Show original words; no generated clinical facts]
+```
+
+**Safety boundary:** the model is never allowed to diagnose, prescribe, determine medical urgency, author a clinical summary, or persist data directly. It may only select submitted sentence IDs and predefined tags; the server validates and stores the final handover.
+
 ## Secure setup
 
 1. Copy [.env.example](.env.example) to `.env.local`. It is ignored by Git.
@@ -32,6 +83,18 @@ tests/          Unit, static security, and fictional evaluation coverage
 4. Add `OPENAI_API_KEY` to root `.env.local` to enable the constrained extraction agent. Without it, the UI visibly runs in safe **Demo mode** and saves no generated handover facts.
 5. Apply all migrations in `database/supabase/migrations/`, then use the administrator pane to assign a clinician to the fictional patient used in your demo.
 6. Run `npm install && npm run dev`.
+
+### Fictional hackathon demo
+
+To run the deterministic, no-API-key handover demonstration, set `CAREVOICE_DEMO_MODE=1` in the ignored root `.env.local`, then restart the backend. Demo mode uses only exact source sentences and visible tags; it is not an AI or clinical mode.
+
+Create the fictional patient, caregiver, clinician, and administrator accounts with:
+
+```bash
+npm run seed:demo -- --reset-password
+```
+
+The command prints a temporary password once. Keep it private, do not commit it, and use the accounts only in the fictional demo environment.
 
 Do not put real credentials, shared demo passwords, or real patient information in this repository. Seeded accounts are local/demo-only and should be provisioned through Supabase Auth or a private deployment setup, not documented with shared passwords.
 

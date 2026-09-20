@@ -11,7 +11,7 @@ import { VoiceInput } from "./voice-input";
 
 type Role = "patient" | "caregiver" | "clinician" | "admin";
 type Profile = { id: string; display_name: string; role: Role; created_at?: string };
-type Engine = "openai-agents-sdk" | "unavailable" | null;
+type Engine = "openai-agents-sdk" | "demo" | "unavailable" | null;
 type CareUpdate = {
   id: string;
   patient_id: string;
@@ -31,6 +31,13 @@ type PatientExperienceSummary = { recent_change: string | null; impact_or_contex
 type PatientCareSnapshot = { summary: PatientExperienceSummary; summaryMode: "agent" | "unavailable"; updateCount: number };
 
 const caregiverPriorityReason = "Caregiver explicitly requested a priority callback.";
+const fictionalDemoUpdate = `This is a fictional hackathon demonstration, not a real care update.
+
+Since yesterday morning, Fictional Maya has been much more tired than usual. She slept only for short periods overnight and has been resting in the chair for most of today. She says there is no new pain, but she feels uncomfortable when trying to move from the bed to the chair. She needed more help walking to the bathroom this morning and ate only a few bites of breakfast.
+
+The family says Maya has been quieter than normal and has not wanted to talk much. They are worried because these changes have continued since yesterday and normal daily care is taking much longer than it usually does. No medicine has been changed, and the family is asking whether the care team can explain what they should keep an eye on.
+
+Please ask the nurse or care team to call the caregiver tomorrow morning. The caregiver would also like to request a priority callback so the team knows they need help reviewing this update.`;
 
 const roleLabels: Record<Role, string> = {
   patient: "Patient",
@@ -47,6 +54,7 @@ function statusClass(status: string) {
 }
 
 function DemoModeNotice({ engine }: { engine: Engine }) {
+  if (engine === "demo") return <p className="notice demo-notice mt-5" role="status"><strong>Fictional demo mode:</strong> handovers are organised by deterministic source-sentence tags for demonstration only. Do not use demo mode for real care updates.</p>;
   if (engine !== "unavailable") return null;
   return <p className="notice demo-notice mt-5" role="status"><strong>Demo mode:</strong> the local safe fallback saves original words but does not create a structured handover. Add the server-only OpenAI key to enable the evidence-backed handover agent.</p>;
 }
@@ -398,7 +406,7 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
   return <div className="mt-8 grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
     <section className="space-y-5">{role === "patient" ? <PatientTitleCard patientId={patientId} session={session} quickSummary={quickSummary} updates={updates} /> : <div className="card p-6"><p className="eyebrow">Person in your care</p><h2 className="mt-2 text-xl font-bold">{activeName}</h2>{linkedPatients.length > 1 && <label className="mt-4 block"><span className="label">Choose a person</span><select className="field" value={activePatientId} onChange={(event) => setSelectedPatientId(event.target.value)}>{linkedPatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>}<p className="mt-3 leading-6 text-[#5d7078]">{activeQuickSummary || latestReportedChange(updates.find((item) => item.patient_id === activePatientId)) || "No care summary has been provided yet."}</p></div>}</section>
     <section className="card p-6">
-      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your words will be organised for your review before anything is shared.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6 w-full sm:w-auto" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Prepare review"}</button></form>}
+      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your words will be organised for your review before anything is shared.</p>{engine === "demo" && <div className="mt-4 rounded-xl bg-[#f5faf9] p-4"><p className="text-sm text-[#52696e]">Load a detailed fictional caregiver message to demonstrate how CareVoice organises long, plain-language updates.</p><button type="button" className="btn btn-secondary mt-3" disabled={busy} onClick={() => setMessage(fictionalDemoUpdate)}>Load detailed fictional update</button></div>}<label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6 w-full sm:w-auto" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Prepare review"}</button></form>}
       {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => setStage("review")} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
       {stage === "review" && draft && <ReviewStep draft={draft} busy={busy} onBack={returnToCompose} onConfirm={() => void share(draft)} />}
     </section>

@@ -9,8 +9,9 @@ import {
   type ClarificationField,
   type Extraction,
   type HandoverV2Extraction,
+  type HandoverTag,
   type PatientExperienceSummary,
-} from "./contracts";
+} from "./contracts.js";
 
 const approvedClarifications: Record<ClarificationField, string> = {
   timing: "When did this begin or change?",
@@ -26,6 +27,7 @@ function sourceSentences(value: string) {
 }
 
 export type SourceSentence = { id: string; text: string };
+export type HandoverMode = "agent" | "demo" | "unavailable";
 
 /** Numbers source sentences before model invocation so the model cannot author display text. */
 export function splitSourceSentences(value: string): SourceSentence[] {
@@ -167,6 +169,15 @@ export function missingInformation(extraction: CareUpdateExtraction): Clarificat
   return missing;
 }
 
+function deriveV2MissingInformation(sentences: HandoverV2Extraction["sentences"]): ClarificationField[] {
+  const tags = new Set(sentences.flatMap((sentence) => sentence.tags));
+  return [
+    !tags.has("timing") && "timing",
+    !tags.has("comfort_or_daily_impact") && "comfort_or_daily_impact",
+    !tags.has("help_requested") && "help_requested",
+  ].filter((field): field is ClarificationField => Boolean(field));
+}
+
 export function nextClarification(extraction: CareUpdateExtraction, answeredFields: ClarificationField[] = []) {
   const field = missingInformation(extraction).find((candidate) => !answeredFields.includes(candidate));
   return field ? { field, question: approvedClarifications[field] } : null;
@@ -246,13 +257,47 @@ export function materializeHandoverV2(message: string, candidate: unknown): Hand
     handover_available: true,
     handover_version: 2,
     sentences,
-    missing_information: parsed.data.missing_information,
+    // Clarification is an application rule, not a model decision. This keeps a
+    // model from suppressing a needed question or inventing a missing field.
+    missing_information: deriveV2MissingInformation(sentences),
     safety_notice: SAFETY_NOTICE,
   };
   return isSafeGroundedExtraction(message, handover) ? handover : null;
 }
 
-export async function extractUpdate(message: string): Promise<{ extraction: CareUpdateExtraction; mode: "unavailable" | "agent" }> {
+function sentenceHasInstructionAttempt(sentence: string) {
+  return /\b(ignore|reveal|override|system prompt|developer message|follow these instructions)\b/i.test(sentence);
+}
+
+/**
+ * A deterministic, fictional-demo-only selector. It never writes prose: it
+ * merely tags exact source sentences so the complete review workflow can be
+ * demonstrated without an API key.
+ */
+export function createDemoHandover(message: string): HandoverV2Extraction | null {
+  const selections = splitSourceSentences(message).flatMap((sentence) => {
+    if (sentenceHasInstructionAttempt(sentence.text)) return [];
+    const tags: HandoverTag[] = [];
+    if (/(today|yesterday|tomorrow|tonight|morning|afternoon|evening|since|ago|week|day|hour|ഇന്ന്|നാളെ|आज|कल)/i.test(sentence.text)) tags.push("timing");
+    if (/(pain|comfort|sleep|slept|rest|eat|walk|move|activity|daily care|tired|weak|quiet|difficult)/i.test(sentence.text)) tags.push("comfort_or_daily_impact");
+    if (/(call|contact|visit|speak|help|review|explain|check-in)/i.test(sentence.text)) tags.push("help_requested");
+    if (/(medication|medicine|tablet|dose|care plan)/i.test(sentence.text)) tags.push("medication_or_care_question");
+    if (tags.length === 0) tags.push("change");
+    else if (tags.some((tag) => tag === "comfort_or_daily_impact")) tags.unshift("change");
+    return [{ source_sentence_id: sentence.id, tags }];
+  }).slice(0, 8);
+  return materializeHandoverV2(message, { selections, missing_information: [] });
+}
+
+export function isDemoMode() {
+  return process.env.CAREVOICE_DEMO_MODE === "1";
+}
+
+export async function extractUpdate(message: string): Promise<{ extraction: CareUpdateExtraction; mode: HandoverMode }> {
+  if (isDemoMode()) {
+    const extraction = createDemoHandover(message);
+    return extraction ? { extraction, mode: "demo" } : { extraction: unavailableExtraction(), mode: "unavailable" };
+  }
   if (!isAgentConfigured()) return { extraction: unavailableExtraction(), mode: "unavailable" };
 
   // Care updates can contain health information. Tracing stays disabled unless
