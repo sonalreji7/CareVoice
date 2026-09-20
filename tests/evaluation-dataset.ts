@@ -1,5 +1,7 @@
+import { splitSourceSentences } from "@carevoice/core-engine/extraction";
+
 /** Fictional-only review set for manual or automated extractor evaluation. */
-export const fictionalCareUpdateEvaluationSet = [
+const legacyFictionalCareUpdateEvaluationSet = [
   { id: "en-change", input: "Mira has been more tired today.", expected: { change: "Mira has been more tired today.", timing: "today", comfort: [], help: [], medication: [] } },
   { id: "malayalam-english", input: "ഇന്ന് Anu വളരെ tired ആണ്. Please call tomorrow.", expected: { change: "ഇന്ന് Anu വളരെ tired ആണ്.", timing: "ഇന്ന് Anu വളരെ tired ആണ്.", comfort: [], help: ["Please call tomorrow."], medication: [] } },
   { id: "hindi-english", input: "Aaj Rohan thoda weak lag raha hai. Can someone call this evening?", expected: { change: "Aaj Rohan thoda weak lag raha hai.", timing: "Aaj Rohan thoda weak lag raha hai.", comfort: [], help: ["Can someone call this evening?"], medication: [] } },
@@ -26,3 +28,33 @@ export const fictionalCareUpdateEvaluationSet = [
   { id: "long-message", input: "This is a long voice-style update: Arun was awake early, then rested, then ate some breakfast, and we wanted to note each part carefully for the team today. We do not need a treatment recommendation. Could someone call after 4 pm?", expected: { change: "This is a long voice-style update: Arun was awake early, then rested, then ate some breakfast, and we wanted to note each part carefully for the team today.", timing: "today", comfort: [], help: ["Could someone call after 4 pm?"], medication: [] } },
   { id: "not-stated", input: "We would appreciate a non-urgent check-in.", expected: { change: "We would appreciate a non-urgent check-in.", timing: "not stated", comfort: [], help: ["We would appreciate a non-urgent check-in."], medication: [] } },
 ] as const;
+
+type LegacyExpectation = typeof legacyFictionalCareUpdateEvaluationSet[number]["expected"];
+
+function expectedV2Selections(input: string, expected: LegacyExpectation) {
+  const tagsBySentence = new Map<string, Set<string>>();
+  const tagSentence = (sentence: string | undefined, tag: string) => {
+    if (!sentence) return;
+    const tags = tagsBySentence.get(sentence) || new Set<string>();
+    tags.add(tag);
+    tagsBySentence.set(sentence, tags);
+  };
+  const sentences = splitSourceSentences(input);
+  const matchingSentence = (phrase: string) => sentences.find((sentence) => sentence.text === phrase || sentence.text.includes(phrase))?.text;
+  tagSentence(matchingSentence(expected.change), "change");
+  if (expected.timing !== "not stated") tagSentence(matchingSentence(expected.timing), "timing");
+  for (const text of expected.comfort) tagSentence(matchingSentence(text), "comfort_or_daily_impact");
+  for (const text of expected.help) tagSentence(matchingSentence(text), "help_requested");
+  for (const text of expected.medication) tagSentence(matchingSentence(text), "medication_or_care_question");
+  return sentences.flatMap((sentence) => {
+    const tags = tagsBySentence.get(sentence.text);
+    return tags ? [{ source_sentence_id: sentence.id, tags: [...tags] }] : [];
+  });
+}
+
+/** Each expected record has only V2 source IDs and allowed tags for live evaluation. */
+export const fictionalCareUpdateEvaluationSet = legacyFictionalCareUpdateEvaluationSet.map((record) => ({
+  id: record.id,
+  input: record.input,
+  expected: { selections: expectedV2Selections(record.input, record.expected) },
+}));

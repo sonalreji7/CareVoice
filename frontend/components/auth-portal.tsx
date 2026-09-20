@@ -1,10 +1,10 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
-import type { CareUpdateExtraction, ClarificationField, Extraction } from "@carevoice/core-engine/contracts";
+import type { CareUpdateExtraction, ClarificationField, Extraction, HandoverTag, HandoverV2Extraction } from "@carevoice/core-engine/contracts";
 import { apiUrl } from "@/lib/api";
 import { supabase } from "@/lib/supabase/client";
 import { VoiceInput } from "./voice-input";
@@ -15,21 +15,20 @@ type Engine = "openai-agents-sdk" | "unavailable" | null;
 type CareUpdate = {
   id: string;
   patient_id: string;
+  author_id?: string;
   original_message: string;
   agent_summary: unknown;
   status: string;
   priority_reasons: string[];
   created_at: string;
-  patients?: { quick_summary?: string | null; profiles?: { display_name?: string | null } | null } | null;
+  patients?: { profile_id?: string; quick_summary?: string | null; profiles?: { display_name?: string | null } | null } | null;
 };
 type PatientRecord = { id: string; profile_id: string; quick_summary?: string | null };
 type Assignment = { caregiver_id: string; patient_id: string; created_at: string };
 type ClinicianAssignment = { clinician_id: string; patient_id: string; created_at: string };
 type LinkedPatient = { id: string; name: string; quickSummary: string };
-type BloodPressureReference = { label: string; detail: string; urgency: "routine" | "contact_clinician" | "urgent" };
-type PatientReport = { id: string; report_label: string; reported_at: string; results_text: string; systolic: number | null; diastolic: number | null; created_at: string; bloodPressureReference: BloodPressureReference | null };
 type PatientExperienceSummary = { recent_change: string | null; impact_or_context: string | null; help_or_report: string | null };
-type PatientOverview = { summary: PatientExperienceSummary; summaryMode: "agent" | "unavailable"; reports: PatientReport[] };
+type PatientCareSnapshot = { summary: PatientExperienceSummary; summaryMode: "agent" | "unavailable"; updateCount: number };
 
 const caregiverPriorityReason = "Caregiver explicitly requested a priority callback.";
 
@@ -187,7 +186,7 @@ export function CarePortal() {
           setLinkedPatients(contexts);
           setUpdates(rows as CareUpdate[]);
         } else if (next.role === "clinician") {
-          const { data: rows, error: rowsError } = await client.from("care_updates").select("*, patients(quick_summary, profiles!patients_profile_id_fkey(display_name))").order("created_at", { ascending: false });
+          const { data: rows, error: rowsError } = await client.from("care_updates").select("*, patients(profile_id, quick_summary, profiles!patients_profile_id_fkey(display_name))").order("created_at", { ascending: false });
           if (rowsError) throw rowsError;
           if (live) setUpdates(rows as CareUpdate[]);
         }
@@ -225,18 +224,27 @@ type Draft = {
   mode: Exclude<Engine, null>;
 };
 
-function asAvailableExtraction(summary: unknown): Extraction | null {
+function asAvailableExtraction(summary: unknown): Extraction | HandoverV2Extraction | null {
   if (!summary || typeof summary !== "object" || (summary as { handover_available?: unknown }).handover_available !== true) return null;
+  if ((summary as { handover_version?: unknown }).handover_version === 2) {
+    const v2 = summary as Partial<HandoverV2Extraction>;
+    if (!Array.isArray(v2.sentences) || !v2.sentences.every((sentence) => sentence && typeof sentence.id === "string" && typeof sentence.text === "string" && Array.isArray(sentence.tags))) return null;
+    return v2 as HandoverV2Extraction;
+  }
   return summary as Extraction;
 }
 
 function latestReportedChange(item?: CareUpdate) {
-  return item ? asAvailableExtraction(item.agent_summary)?.change ?? "" : "";
+  const handover = item && asAvailableExtraction(item.agent_summary);
+  if (!handover) return "";
+  if ("handover_version" in handover) return handover.sentences.find((sentence) => sentence.tags.includes("change"))?.text ?? handover.sentences[0]?.text ?? "";
+  return handover.change ?? "";
 }
 
 function HandoverPreview({ summary }: { summary: unknown }) {
   const handover = asAvailableExtraction(summary);
   if (!handover) return <p className="mt-3 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">Structured handover unavailable — review the original message.</p>;
+  if ("handover_version" in handover) return <div className="mt-4 rounded-xl bg-[#f5faf9] p-4"><p className="label">AI-assisted organisation of your words. Not clinical advice.</p><ol className="mt-3 space-y-3 text-sm">{handover.sentences.map((sentence, index) => <li key={sentence.id} className="rounded-lg border border-[#dcebe7] bg-white p-3"><p className="font-bold text-[#24444a]">Sentence {index + 1}</p><div className="mt-2 flex flex-wrap gap-2">{sentence.tags.map((tag: HandoverTag) => <span key={tag} className="badge status-new">{tag.replaceAll("_", " ")}</span>)}</div><p className="mt-2 whitespace-pre-wrap text-[#52696e]">{sentence.text}</p></li>)}</ol></div>;
   const quoteList = (quotes: string[]) => quotes.length ? quotes.join(" ") : "not stated";
   return <div className="mt-4 rounded-xl bg-[#f5faf9] p-4"><p className="label">AI-assisted organisation of your words — reviewed against the original message. Not clinical advice.</p><dl className="mt-3 grid gap-3 text-sm"><div><dt className="font-bold">Reported change</dt><dd>{handover.change || "not stated"}</dd></div><div><dt className="font-bold">Timing</dt><dd>{handover.timing}</dd></div><div><dt className="font-bold">Comfort or daily impact</dt><dd>{quoteList(handover.comfort_or_daily_impact)}</dd></div><div><dt className="font-bold">Help requested</dt><dd>{quoteList(handover.help_requested)}</dd></div><div><dt className="font-bold">Medication or care question</dt><dd>{quoteList(handover.medication_or_care_question)}</dd></div></dl></div>;
 }
@@ -247,70 +255,37 @@ function PriorityExplanation({ reasons }: { reasons: string[] }) {
 }
 
 function PatientTitleCard({ patientId, session, quickSummary, updates }: { patientId: string; session: Session; quickSummary: string; updates: CareUpdate[] }) {
-  const [overview, setOverview] = useState<PatientOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [snapshot, setSnapshot] = useState<PatientCareSnapshot | null>(null);
+  const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState("");
-  const [reportLabel, setReportLabel] = useState("");
-  const [reportedAt, setReportedAt] = useState(() => new Date().toISOString().slice(0, 10));
-  const [resultsText, setResultsText] = useState("");
-  const [systolic, setSystolic] = useState("");
-  const [diastolic, setDiastolic] = useState("");
-  const [consent, setConsent] = useState(false);
-
-  const loadOverview = useCallback(async () => {
-    if (!patientId) return;
-    setLoading(true);
-    try {
-      const response = await fetch(apiUrl(`/api/patients/${patientId}/overview`), { headers: { Authorization: `Bearer ${session.access_token}` } });
-      const body = await response.json() as PatientOverview & { error?: string };
-      if (!response.ok) throw new Error(body.error || "We could not load your care snapshot.");
-      setOverview(body);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "We could not load your care snapshot.");
-    } finally { setLoading(false); }
-  }, [patientId, session.access_token]);
-
-  useEffect(() => { void loadOverview(); }, [loadOverview, updates]);
-
-  const hasCompleteBloodPressure = Boolean(systolic.trim() && diastolic.trim());
-  const hasPartialBloodPressure = Boolean(systolic.trim()) !== Boolean(diastolic.trim());
-  const canSaveReport = Boolean(reportLabel.trim() && reportedAt && consent && !hasPartialBloodPressure && (resultsText.trim() || hasCompleteBloodPressure));
   const lines = [
-    { label: "Recent change", value: overview?.summary.recent_change },
-    { label: "Impact or context", value: overview?.summary.impact_or_context },
-    { label: "Help or report detail", value: overview?.summary.help_or_report },
+    { label: "Recent change", value: snapshot?.summary.recent_change },
+    { label: "Impact or context", value: snapshot?.summary.impact_or_context },
+    { label: "Help or report detail", value: snapshot?.summary.help_or_report },
   ];
 
-  async function saveReport(event: FormEvent) {
-    event.preventDefault();
-    if (!canSaveReport) return;
-    setSaving(true);
+  async function createSnapshot() {
+    if (!patientId) return;
+    setCreating(true);
     setNotice("");
     try {
-      const response = await fetch(apiUrl(`/api/patients/${patientId}/reports`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ reportLabel, reportedAt, resultsText, systolic: systolic ? Number(systolic) : null, diastolic: diastolic ? Number(diastolic) : null }),
-      });
-      const body = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(body.error || "We could not save this report.");
-      setReportLabel(""); setResultsText(""); setSystolic(""); setDiastolic(""); setConsent(false);
-      setNotice("Your report was saved and shared with the care team.");
-      await loadOverview();
+      const response = await fetch(apiUrl(`/api/patients/${patientId}/care-snapshot`), { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
+      const body = await response.json() as PatientCareSnapshot & { error?: string };
+      if (!response.ok) throw new Error(body.error || "We could not create your care snapshot.");
+      setSnapshot(body);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "We could not save this report.");
-    } finally { setSaving(false); }
+      setNotice(error instanceof Error ? error.message : "We could not create your care snapshot.");
+    } finally { setCreating(false); }
   }
 
-  return <div className="card p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="eyebrow">Your 3-line care snapshot</p><h2 className="mt-2 text-xl font-bold">What you have reported</h2></div><button type="button" className="btn btn-quiet" disabled={loading} onClick={() => void loadOverview()}>{loading ? "Refreshing…" : "Refresh snapshot"}</button></div><p className="mt-3 text-sm leading-6 text-[#5d7078]">AI-assisted organisation of your recorded words. It does not diagnose, prescribe, or replace clinical review.</p><div className="mt-4 space-y-3">{lines.map((line) => <div key={line.label} className="rounded-lg bg-[#f5faf9] p-3 text-sm"><p className="font-bold">{line.label}</p><p className="mt-1 text-[#52696e]">{line.value || "No user-provided detail is available."}</p></div>)}</div>{overview?.summaryMode === "unavailable" && <p className="mt-3 text-sm text-[#5d7078]">The structured snapshot is unavailable right now; your original updates remain available below.</p>}{!overview && !loading && <p className="mt-3 text-sm text-[#5d7078]">{quickSummary || latestReportedChange(updates[0]) || "No care summary has been provided yet."}</p>}<details className="mt-5 rounded-xl border border-[#cfe2dd] p-4"><summary className="cursor-pointer font-bold text-[#0d766e]">Log a lab report or blood-pressure reading</summary><p className="mt-3 text-sm leading-6 text-[#5d7078]">Enter report text in your own words. Optional blood-pressure flags use general adult reference ranges only; they are not a diagnosis.</p><form className="mt-4 space-y-4" onSubmit={saveReport}><div className="grid gap-4 md:grid-cols-2"><label><span className="label">Report title</span><input className="field" required maxLength={120} value={reportLabel} onChange={(event) => setReportLabel(event.target.value)} placeholder="For example: Blood test results" /></label><label><span className="label">Report date</span><input className="field" required type="date" value={reportedAt} onChange={(event) => setReportedAt(event.target.value)} /></label></div><label className="block"><span className="label">Report details</span><textarea className="field min-h-28" maxLength={5000} value={resultsText} onChange={(event) => setResultsText(event.target.value)} placeholder="Type the result or notes exactly as you received them." /></label><div className="grid gap-4 md:grid-cols-2"><label><span className="label">Systolic (top number, optional)</span><input className="field" inputMode="numeric" min="40" max="300" type="number" value={systolic} onChange={(event) => setSystolic(event.target.value)} /></label><label><span className="label">Diastolic (bottom number, optional)</span><input className="field" inputMode="numeric" min="20" max="200" type="number" value={diastolic} onChange={(event) => setDiastolic(event.target.value)} /></label></div>{hasPartialBloodPressure && <p className="text-sm text-[#9d3d25]" role="alert">Enter both blood-pressure values together.</p>}<Check value={consent} setValue={setConsent} label="I consent to share this report with the care team and use AI-assisted organisation." /><button className="btn btn-primary" disabled={!canSaveReport || saving}>{saving ? "Saving…" : "Save report"}</button></form></details><details className="mt-4"><summary className="cursor-pointer font-bold text-[#0d766e]">View logged reports and readings</summary><div className="mt-3 space-y-3">{overview?.reports.length ? overview.reports.map((report) => <article key={report.id} className="rounded-xl border border-[#cfe2dd] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-bold">{report.report_label}</h3><p className="text-sm text-[#5d7078]">{report.reported_at}</p></div>{report.results_text && <p className="mt-3 whitespace-pre-wrap text-sm text-[#52696e]">{report.results_text}</p>}{report.systolic != null && <p className="mt-3 text-sm"><strong>Blood pressure entered:</strong> {report.systolic}/{report.diastolic} mm Hg</p>}{report.bloodPressureReference && <p className={`mt-3 rounded-lg p-3 text-sm ${report.bloodPressureReference.urgency === "urgent" ? "bg-[#fff4e7]" : "bg-[#f5faf9]"}`}><strong>{report.bloodPressureReference.label}:</strong> {report.bloodPressureReference.detail}</p>}</article>) : <p className="text-sm text-[#5d7078]">No lab reports or readings have been logged yet.</p>}</div></details>{notice && <p className="notice mt-4" role="status">{notice}</p>}</div>;
+  return <div className="card p-6"><div><p className="eyebrow">Your care snapshot</p><h2 className="mt-2 text-xl font-bold">What you have reported</h2></div><p className="mt-3 text-sm leading-6 text-[#5d7078]">Create a snapshot when you choose. It organises up to 10 of your most recent care updates using only your recorded words. It does not diagnose, prescribe, or replace clinical review.</p><button type="button" className="btn btn-secondary mt-5" disabled={!patientId || creating} onClick={() => void createSnapshot()}>{creating ? "Creating snapshot…" : "Create care snapshot"}</button>{snapshot && <><p className="mt-4 text-sm text-[#5d7078]">This snapshot used your {snapshot.updateCount} most recent care update{snapshot.updateCount === 1 ? "" : "s"}.</p><div className="mt-3 space-y-3">{lines.map((line) => <div key={line.label} className="rounded-lg bg-[#f5faf9] p-3 text-sm"><p className="font-bold">{line.label}</p><p className="mt-1 text-[#52696e]">{line.value || "No user-provided detail is available."}</p></div>)}</div></>}{snapshot?.summaryMode === "unavailable" && <p className="mt-3 text-sm text-[#5d7078]">The structured snapshot is unavailable right now; your original updates remain available below.</p>}{!snapshot && <p className="mt-4 text-sm text-[#5d7078]">{quickSummary || latestReportedChange(updates[0]) || "No care summary has been provided yet."}</p>}{notice && <p className="notice mt-4" role="status">{notice}</p>}</div>;
 }
 
 function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatients, updates, session, engine, setEngine, setUpdates, setNotice }: { role: "patient" | "caregiver"; patientId: string; linkedName: string; quickSummary: string; linkedPatients: LinkedPatient[]; updates: CareUpdate[]; session: Session; profile: Profile; engine: Engine; setEngine: (engine: Engine) => void; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void }) {
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [stage, setStage] = useState<"compose" | "clarification">("compose");
+  const [stage, setStage] = useState<"compose" | "clarification" | "review">("compose");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [clarificationAnswer, setClarificationAnswer] = useState("");
   const [busy, setBusy] = useState(false);
@@ -337,8 +312,7 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
       setDraft(next);
       setEngine(next.mode);
       setClarificationAnswer("");
-      if (next.clarification) setStage("clarification");
-      else await share(next);
+      setStage(next.clarification ? "clarification" : "review");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "We could not prepare the structured handover.");
     } finally {
@@ -381,6 +355,13 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
     }
   }
 
+  function returnToCompose() {
+    setStage("compose");
+    setDraft(null);
+    setClarificationAnswer("");
+    setNotice("");
+  }
+
   function beginDraft(event: FormEvent) {
     event.preventDefault();
     if (canContinue) void prepareDraft();
@@ -417,8 +398,9 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
   return <div className="mt-8 grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
     <section className="space-y-5">{role === "patient" ? <PatientTitleCard patientId={patientId} session={session} quickSummary={quickSummary} updates={updates} /> : <div className="card p-6"><p className="eyebrow">Person in your care</p><h2 className="mt-2 text-xl font-bold">{activeName}</h2>{linkedPatients.length > 1 && <label className="mt-4 block"><span className="label">Choose a person</span><select className="field" value={activePatientId} onChange={(event) => setSelectedPatientId(event.target.value)}>{linkedPatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>}<p className="mt-3 leading-6 text-[#5d7078]">{activeQuickSummary || latestReportedChange(updates.find((item) => item.patient_id === activePatientId)) || "No care summary has been provided yet."}</p></div>}</section>
     <section className="card p-6">
-      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your original words remain available for review with the structured handover.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Share update"}</button></form>}
-      {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => void share(draft)} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
+      {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your words will be organised for your review before anything is shared.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Prepare review"}</button></form>}
+      {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => setStage("review")} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
+      {stage === "review" && draft && <ReviewStep draft={draft} busy={busy} onBack={returnToCompose} onConfirm={() => void share(draft)} />}
     </section>
     {role === "caregiver" ? <CaregiverUpdates updates={updates} patients={linkedPatients} session={session} setUpdates={setUpdates} setNotice={setNotice} onRebuild={rebuildHandover} rebuildingId={rebuildingId} /> : <section className="card p-6 lg:col-span-2"><h2 className="text-xl font-bold">Your updates</h2><div className="mt-4 space-y-4">{updates.length ? updates.map((item) => <UpdateCard key={item.id} item={item} onRebuild={() => void rebuildHandover(item.id)} rebuilding={rebuildingId === item.id} />) : <p className="text-[#5d7078]">No updates have been shared yet.</p>}</div></section>}
   </div>;
@@ -426,7 +408,11 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
 
 function ClarificationStep({ clarification, answer, setAnswer, busy, onSkip, onContinue }: { clarification: Clarification | null; answer: string; setAnswer: (value: string) => void; busy: boolean; onSkip: () => void; onContinue: () => void }) {
   if (!clarification) return null;
-  return <div><p className="eyebrow">Optional clarification</p><h2 className="mt-2 text-2xl font-bold">One detail could make this handover clearer</h2><p className="mt-3 text-[#5d7078]">{clarification.question}</p><label className="mt-5 block"><span className="label">Your answer</span><textarea className="field min-h-28" maxLength={1000} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Add only what you want the care team to know." /></label><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onSkip}>Skip and share</button><button type="button" className="btn btn-primary" disabled={busy || !answer.trim()} onClick={onContinue}>{busy ? "Preparing…" : "Continue"}</button></div></div>;
+  return <div><p className="eyebrow">Optional clarification</p><h2 className="mt-2 text-2xl font-bold">One detail could make this handover clearer</h2><p className="mt-3 text-[#5d7078]">{clarification.question}</p><label className="mt-5 block"><span className="label">Your answer</span><textarea className="field min-h-28" maxLength={1000} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Add only what you want the care team to know." /></label><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onSkip}>Skip and continue to review</button><button type="button" className="btn btn-primary" disabled={busy || !answer.trim()} onClick={onContinue}>{busy ? "Preparing…" : "Continue to review"}</button></div></div>;
+}
+
+function ReviewStep({ draft, busy, onBack, onConfirm }: { draft: Draft; busy: boolean; onBack: () => void; onConfirm: () => void }) {
+  return <div><p className="eyebrow">Review before sharing</p><h2 className="mt-2 text-2xl font-bold">Confirm this care update</h2><p className="mt-3 text-[#5d7078]">Review your submitted words and their AI-assisted organisation. Nothing has been shared yet.</p><div className="mt-5 rounded-xl border border-[#cfe2dd] p-4"><p className="label">Your submitted words</p><p className="mt-2 whitespace-pre-wrap text-[#52696e]">{draft.originalMessage}</p></div><HandoverPreview summary={draft.extraction} /><PriorityExplanation reasons={draft.priorityReasons} /><p className="mt-4 text-sm text-[#5d7078]">AI-assisted organisation of your words. Not clinical advice.</p><div className="mt-6 flex flex-wrap gap-3"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onBack}>Back to edit</button><button type="button" className="btn btn-primary" disabled={busy} onClick={onConfirm}>{busy ? "Sharing…" : "Confirm and share"}</button></div></div>;
 }
 
 function UpdateCard({ item, onRebuild, rebuilding }: { item: CareUpdate; onRebuild?: () => void; rebuilding?: boolean }) {
@@ -443,7 +429,7 @@ function reviewRank(item: CareUpdate) {
   return 3;
 }
 
-function orderedUpdateGroups(updates: CareUpdate[], patients: LinkedPatient[] = [], fallbackName = "Patient") {
+function orderedUpdateGroups(updates: CareUpdate[], patients: LinkedPatient[] = [], fallbackName = "Patient", chronologicalTimeline = false) {
   const contexts = new Map(patients.map((patient) => [patient.id, patient]));
   const groups = new Map<string, PatientUpdateGroup>();
   for (const patient of patients) groups.set(patient.id, { patientId: patient.id, name: patient.name, quickSummary: patient.quickSummary, updates: [], priorityCount: 0, firstRank: 4 });
@@ -462,7 +448,9 @@ function orderedUpdateGroups(updates: CareUpdate[], patients: LinkedPatient[] = 
     existing.firstRank = Math.min(existing.firstRank, reviewRank(item));
     groups.set(item.patient_id, existing);
   }
-  return [...groups.values()].sort((left, right) => left.firstRank - right.firstRank || Date.parse(right.updates[0]?.created_at || "0") - Date.parse(left.updates[0]?.created_at || "0"));
+  const ordered = [...groups.values()].sort((left, right) => left.firstRank - right.firstRank || Date.parse(right.updates[0]?.created_at || "0") - Date.parse(left.updates[0]?.created_at || "0"));
+  if (chronologicalTimeline) for (const group of ordered) group.updates.sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at));
+  return ordered;
 }
 
 function CaregiverUpdates({ updates, patients, session, setUpdates, setNotice, onRebuild, rebuildingId }: { updates: CareUpdate[]; patients: LinkedPatient[]; session: Session; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void; onRebuild: (updateId: string) => Promise<void>; rebuildingId: string }) {
@@ -486,10 +474,44 @@ function CaregiverUpdates({ updates, patients, session, setUpdates, setNotice, o
   return <section className="card p-6 lg:col-span-2"><p className="eyebrow">Care updates by person</p><h2 className="mt-2 text-xl font-bold">Updates in your care</h2><p className="mt-2 text-[#5d7078]">Open a person to review their updates and explicitly request a priority review when needed.</p><div className="mt-5 space-y-3">{groups.length ? groups.map((group) => <details key={group.patientId} className="rounded-xl border border-[#cfe2dd] bg-white p-4"><summary className="cursor-pointer list-none"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{group.name}</h3><p className="mt-1 text-sm text-[#5d7078]">{group.updates.length} update{group.updates.length === 1 ? "" : "s"}{group.priorityCount ? ` · ${group.priorityCount} priority` : ""}</p></div><span className="text-sm font-bold text-[#0d766e]">Open updates</span></div></summary>{group.quickSummary && <p className="mt-4 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">{group.quickSummary}</p>}<div className="mt-4 space-y-4">{group.updates.length ? group.updates.map((item) => { const alreadyRequested = item.priority_reasons?.includes(caregiverPriorityReason); const isClosed = item.status === "closed"; return <div key={item.id}><UpdateCard item={item} onRebuild={() => void onRebuild(item.id)} rebuilding={rebuildingId === item.id} /><div className="mt-3 flex flex-wrap items-center gap-3">{isClosed ? <span className="text-sm text-[#5d7078]">This closed update cannot be escalated.</span> : <button type="button" className="btn btn-secondary" disabled={busyId === item.id || alreadyRequested} onClick={() => void requestPriorityReview(item.id)}>{alreadyRequested ? "Priority review requested" : busyId === item.id ? "Requesting…" : "Request priority review"}</button>} {!isClosed && !alreadyRequested && <span className="text-sm text-[#5d7078]">This sends an explicit request to the clinician queue.</span>}</div></div>; }) : <p className="text-[#5d7078]">No updates have been shared for this person yet.</p>}</div></details>) : <p className="text-[#5d7078]">No people are linked to this account yet.</p>}</div></section>;
 }
 
+type FeedbackOutcome = "useful_as_is" | "needed_original_words" | "missing_relevant_detail" | "incorrect_tagging" | "other";
+
+const feedbackLabels: Record<FeedbackOutcome, string> = {
+  useful_as_is: "Useful as is",
+  needed_original_words: "Needed original words",
+  missing_relevant_detail: "Missing relevant detail",
+  incorrect_tagging: "Incorrect tagging",
+  other: "Other",
+};
+
+function HandoverFeedback({ updateId, session }: { updateId: string; session: Session }) {
+  const [outcome, setOutcome] = useState<FeedbackOutcome>("useful_as_is");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch(apiUrl(`/api/care-updates/${updateId}/handover-feedback`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ outcome, note }),
+      });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "We could not record the feedback.");
+      setNote(""); setNotice("Handover feedback recorded. The care update was not changed.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "We could not record the feedback.");
+    } finally { setBusy(false); }
+  }
+  return <details className="mt-4 rounded-lg border border-[#dcebe7] p-3"><summary className="cursor-pointer font-bold text-[#0d766e]">Record handover quality feedback</summary><form className="mt-3 space-y-3" onSubmit={submit}><label className="block"><span className="label">Outcome</span><select className="field" value={outcome} onChange={(event) => setOutcome(event.target.value as FeedbackOutcome)}>{(Object.keys(feedbackLabels) as FeedbackOutcome[]).map((value) => <option key={value} value={value}>{feedbackLabels[value]}</option>)}</select></label><label className="block"><span className="label">Note (optional)</span><textarea className="field min-h-20" maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Describe the handover quality only." /></label><button className="btn btn-secondary" disabled={busy}>{busy ? "Recording…" : "Record feedback"}</button>{notice && <p className="mt-2 text-sm text-[#5d7078]" role="status">{notice}</p>}</form></details>;
+}
+
 function ClinicianUpdates({ updates, session, setUpdates }: { updates: CareUpdate[]; session: Session; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void }) {
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState("");
-  const groups = useMemo(() => orderedUpdateGroups(updates), [updates]);
+  const groups = useMemo(() => orderedUpdateGroups(updates, [], "Patient", true), [updates]);
   async function updateStatus(id: string, status: "acknowledged" | "closed") {
     setBusyId(id); setNotice("");
     try {
@@ -501,7 +523,8 @@ function ClinicianUpdates({ updates, session, setUpdates }: { updates: CareUpdat
       setNotice(error instanceof Error ? error.message : "We could not update the review status.");
     } finally { setBusyId(""); }
   }
-  return <section className="card mt-8 p-6"><p className="eyebrow">Executive summary</p><h2 className="mt-2 text-2xl font-bold">Care updates for review</h2><p className="mt-2 text-[#5d7078]">People with active priority requests appear first. Open a person only when more detail is needed.</p>{notice && <p className="notice mt-4" role="alert">{notice}</p>}<div className="mt-6 space-y-3">{groups.length ? groups.map((group) => <details key={group.patientId} open={group.firstRank === 0} className="rounded-xl border border-[#cfe2dd] bg-white p-5"><summary className="cursor-pointer list-none"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{group.name}</h3><p className="mt-1 text-sm text-[#5d7078]">{group.updates.length} update{group.updates.length === 1 ? "" : "s"}{group.priorityCount ? ` · ${group.priorityCount} priority` : ""}</p></div>{group.priorityCount ? <span className="badge status-priority">priority</span> : <span className="text-sm font-bold text-[#0d766e]">Open review</span>}</div></summary>{group.quickSummary && <p className="mt-4 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">{group.quickSummary}</p>}<div className="mt-4 space-y-4">{group.updates.map((item) => <article key={item.id} className="rounded-xl border border-[#e3efec] p-4"><div className="flex flex-wrap justify-between gap-3"><p className="text-sm text-[#5d7078]">{new Date(item.created_at).toLocaleString()}</p><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></div><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} /><div className="mt-4 flex flex-wrap gap-2">{item.status === "new" && <button className="btn btn-secondary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "acknowledged")}>Acknowledge</button>}{item.status === "acknowledged" && <button className="btn btn-primary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "closed")}>Close</button>}</div><details className="mt-4 rounded-lg bg-[#f5faf9] p-4"><summary className="cursor-pointer font-bold">Additional information</summary><p className="mt-3 text-sm font-bold">Original words</p><p className="mt-1 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>)}</div></details>) : <p className="text-[#5d7078]">No care updates are currently available to you.</p>}</div></section>;
+  const authorRole = (item: CareUpdate) => item.author_id && item.patients?.profile_id ? item.author_id === item.patients.profile_id ? "Patient" : "Caregiver" : "Author role unavailable";
+  return <section className="card mt-8 p-6"><p className="eyebrow">Executive summary</p><h2 className="mt-2 text-2xl font-bold">Care updates for review</h2><p className="mt-2 text-[#5d7078]">People with active priority requests appear first. Within each person, updates appear in chronological order.</p>{notice && <p className="notice mt-4" role="alert">{notice}</p>}<div className="mt-6 space-y-3">{groups.length ? groups.map((group) => <details key={group.patientId} open={group.firstRank === 0} className="rounded-xl border border-[#cfe2dd] bg-white p-5"><summary className="cursor-pointer list-none"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{group.name}</h3><p className="mt-1 text-sm text-[#5d7078]">{group.updates.length} update{group.updates.length === 1 ? "" : "s"}{group.priorityCount ? ` · ${group.priorityCount} priority` : ""}</p></div>{group.priorityCount ? <span className="badge status-priority">priority</span> : <span className="text-sm font-bold text-[#0d766e]">Open review</span>}</div></summary>{group.quickSummary && <p className="mt-4 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">{group.quickSummary}</p>}<div className="mt-5 space-y-4 border-l-2 border-[#cfe2dd] pl-4">{group.updates.map((item) => <article key={item.id} className="rounded-xl border border-[#e3efec] p-4"><div className="flex flex-wrap justify-between gap-3"><div className="text-sm text-[#5d7078]"><p>{new Date(item.created_at).toLocaleString()}</p><p className="mt-1">{authorRole(item)} · {asAvailableExtraction(item.agent_summary) ? "Handover ready" : "Original words only"}</p></div><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></div><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} /><div className="mt-4 flex flex-wrap gap-2">{item.status === "new" && <button className="btn btn-secondary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "acknowledged")}>Acknowledge</button>}{item.status === "acknowledged" && <button className="btn btn-primary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "closed")}>Close</button>}</div><HandoverFeedback updateId={item.id} session={session} /><details className="mt-4 rounded-lg bg-[#f5faf9] p-4"><summary className="cursor-pointer font-bold">Additional information</summary><p className="mt-3 text-sm font-bold">Original words</p><p className="mt-1 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>)}</div></details>) : <p className="text-[#5d7078]">No care updates are currently available to you.</p>}</div></section>;
 }
 
 function AdminPanel({ currentUserId }: { currentUserId: string }) {

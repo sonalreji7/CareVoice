@@ -32,13 +32,49 @@ export const extractionSchema = z.object({
 
 export type Extraction = z.infer<typeof extractionSchema>;
 
+export const handoverTagSchema = z.enum([
+  "change",
+  "timing",
+  "comfort_or_daily_impact",
+  "help_requested",
+  "medication_or_care_question",
+]);
+
+export type HandoverTag = z.infer<typeof handoverTagSchema>;
+
+const sourceSentenceIdSchema = z.string().regex(/^s[1-9]\d*$/);
+
+export const handoverV2CandidateSchema = z.object({
+  selections: z.array(z.object({
+    source_sentence_id: sourceSentenceIdSchema,
+    tags: z.array(handoverTagSchema).min(1).max(5),
+  }).strict()).max(8),
+  missing_information: z.array(clarificationFieldSchema).max(3),
+}).strict();
+
+export type HandoverV2Candidate = z.infer<typeof handoverV2CandidateSchema>;
+
+export const handoverV2Schema = z.object({
+  handover_available: z.literal(true),
+  handover_version: z.literal(2),
+  sentences: z.array(z.object({
+    id: sourceSentenceIdSchema,
+    text: sourceQuoteSchema,
+    tags: z.array(handoverTagSchema).min(1).max(5),
+  }).strict()).max(8),
+  missing_information: z.array(clarificationFieldSchema).max(3),
+  safety_notice: z.literal(SAFETY_NOTICE),
+}).strict();
+
+export type HandoverV2Extraction = z.infer<typeof handoverV2Schema>;
+
 export type UnavailableExtraction = {
   handover_available: false;
   missing_information: ClarificationField[];
   safety_notice: typeof SAFETY_NOTICE;
 };
 
-export type CareUpdateExtraction = Extraction | UnavailableExtraction;
+export type CareUpdateExtraction = Extraction | HandoverV2Extraction | UnavailableExtraction;
 
 const patientSummaryLineSchema = z.string().min(1).max(2_000).nullable();
 

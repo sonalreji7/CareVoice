@@ -11,7 +11,6 @@ import {
   summarizePatientExperience,
 } from "@carevoice/core-engine/extraction";
 import type { CareUpdateExtraction, PatientExperienceSummary } from "@carevoice/core-engine/contracts";
-import { bloodPressureReference } from "@carevoice/core-engine/blood-pressure";
 import { evaluatePriority } from "@carevoice/core-engine/priority";
 import {
   clarificationAnswersSchema,
@@ -52,8 +51,8 @@ const shareRateLimiter = createFixedWindowRateLimiter(10, 60_000);
 const audioRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const rebuildRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const escalationRateLimiter = createFixedWindowRateLimiter(6, 60_000);
-const reportRateLimiter = createFixedWindowRateLimiter(10, 60_000);
-const overviewRateLimiter = createFixedWindowRateLimiter(8, 60_000);
+const snapshotRateLimiter = createFixedWindowRateLimiter(4, 60_000);
+const feedbackRateLimiter = createFixedWindowRateLimiter(12, 60_000);
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const supportedAudioTypes = new Set(["audio/webm", "audio/ogg", "audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]);
 const draftRequestSchema = z.object({
@@ -73,31 +72,10 @@ const transitionRequestSchema = z.object({
   status: z.enum(["acknowledged", "closed"]),
   reason: z.string().trim().max(500).optional(),
 }).strict();
-const reportRequestSchema = z.object({
-  reportLabel: z.string().trim().min(1).max(120),
-  reportedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  resultsText: z.string().trim().max(5_000).default(""),
-  systolic: z.number().int().min(40).max(300).nullable().optional().default(null),
-  diastolic: z.number().int().min(20).max(200).nullable().optional().default(null),
-}).strict().superRefine((value, context) => {
-  if ((value.systolic === null) !== (value.diastolic === null)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Enter both blood-pressure values together." });
-  }
-  if (!value.resultsText && value.systolic === null) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Enter report text or both blood-pressure values." });
-  }
-});
-
-type PatientReport = {
-  id: string;
-  patient_id: string;
-  report_label: string;
-  reported_at: string;
-  results_text: string;
-  systolic: number | null;
-  diastolic: number | null;
-  created_at: string;
-};
+const feedbackRequestSchema = z.object({
+  outcome: z.enum(["useful_as_is", "needed_original_words", "missing_relevant_detail", "incorrect_tagging", "other"]),
+  note: z.string().trim().max(500).optional().default(""),
+}).strict();
 
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000" }));
 app.use(express.raw({
@@ -231,33 +209,31 @@ app.get("/health", (_, response) => response.json({
   secureWritesConfigured: Boolean(serviceClient),
 }));
 
-app.get("/api/patients/:patientId/overview", async (request, response) => {
+app.post("/api/patients/:patientId/care-snapshot", async (request, response) => {
   const user = await requireAuthenticatedUser(request, response);
   const client = configuredService(response);
   if (!user || !client) return;
-  const rate = overviewRateLimiter.check(user.id);
+  const rate = snapshotRateLimiter.check(user.id);
   if (!rate.allowed) {
     response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
-    respondError(response, 429, "Please wait a moment before refreshing the patient overview.");
+    respondError(response, 429, "Please wait a moment before creating another care snapshot.");
     return;
   }
   try {
     const actor = await loadActor(client, user.id);
-    if (!actor || !await authorizePatientRead(client, actor, request.params.patientId)) {
-      respondError(response, 403, "You are not authorised to view this patient overview.");
+    if (!actor || actor.role !== "patient" || !await authorizePatientRead(client, actor, request.params.patientId)) {
+      respondError(response, 403, "Only the patient can create this care snapshot.");
       return;
     }
-    const [updatesResult, reportsResult] = await Promise.all([
-      client.from("care_updates").select("original_message, created_at").eq("patient_id", request.params.patientId).order("created_at", { ascending: false }).limit(75),
-      client.from("patient_reports").select("id, patient_id, report_label, reported_at, results_text, systolic, diastolic, created_at").eq("patient_id", request.params.patientId).order("reported_at", { ascending: false }).order("created_at", { ascending: false }).limit(75),
-    ]);
-    if (updatesResult.error || reportsResult.error) throw new Error("Patient records could not be loaded.");
+    const updatesResult = await client
+      .from("care_updates")
+      .select("original_message, created_at")
+      .eq("patient_id", request.params.patientId)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (updatesResult.error) throw new Error("Patient updates could not be loaded.");
     const updates = (updatesResult.data || []) as Array<{ original_message: string; created_at: string }>;
-    const reports = (reportsResult.data || []) as PatientReport[];
-    const userProvidedRecords = [
-      ...[...updates].reverse().map((update) => `Care update (${update.created_at}):\n${update.original_message}`),
-      ...[...reports].reverse().filter((report) => Boolean(report.results_text.trim())).map((report) => `Report (${report.reported_at}) — ${report.report_label}:\n${report.results_text}`),
-    ].join("\n\n").slice(0, 80_000);
+    const userProvidedRecords = [...updates].reverse().map((update) => update.original_message).join("\n\n").slice(0, 20_000);
     let summary: PatientExperienceSummary = { recent_change: null, impact_or_context: null, help_or_report: null };
     let summaryMode: "agent" | "unavailable" = "unavailable";
     try {
@@ -267,51 +243,9 @@ app.get("/api/patients/:patientId/overview", async (request, response) => {
     } catch {
       // The overview remains useful without model output; never fabricate a summary.
     }
-    response.json({
-      summary,
-      summaryMode,
-      reports: reports.map((report) => ({ ...report, bloodPressureReference: bloodPressureReference(report.systolic, report.diastolic) })),
-    });
+    response.json({ summary, summaryMode, updateCount: updates.length });
   } catch {
-    respondError(response, 422, "We could not build this patient overview. You can still review the original updates.");
-  }
-});
-
-app.post("/api/patients/:patientId/reports", async (request, response) => {
-  const user = await requireAuthenticatedUser(request, response);
-  const client = configuredService(response);
-  if (!user || !client) return;
-  const rate = reportRateLimiter.check(user.id);
-  if (!rate.allowed) {
-    response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
-    respondError(response, 429, "Please wait a moment before logging another report.");
-    return;
-  }
-  try {
-    const input = reportRequestSchema.parse(request.body ?? {});
-    const actor = await loadActor(client, user.id);
-    if (!actor || !await authorizeSubmission(client, actor, request.params.patientId)) {
-      respondError(response, 403, "Only the patient or an assigned caregiver can log a report.");
-      return;
-    }
-    const { data, error } = await client.rpc("create_patient_report_from_server", {
-      p_patient_id: request.params.patientId,
-      p_author_id: actor.id,
-      p_report_label: input.reportLabel,
-      p_reported_at: input.reportedAt,
-      p_results_text: input.resultsText,
-      p_systolic: input.systolic,
-      p_diastolic: input.diastolic,
-    });
-    const report = Array.isArray(data) ? data[0] : data;
-    if (error?.code === "P0001" || error?.code === "22023") {
-      respondError(response, 400, "The report could not be saved. Check the entered details and try again.");
-      return;
-    }
-    if (error || !report) throw new Error("The trusted report record could not be created.");
-    response.status(201).json({ report: { ...report, bloodPressureReference: bloodPressureReference(report.systolic, report.diastolic) } });
-  } catch (error) {
-    respondError(response, error instanceof z.ZodError ? 400 : 422, error instanceof z.ZodError ? error.message : "We could not save this report. Please try again.");
+    respondError(response, 422, "We could not create this care snapshot. You can still review your original updates.");
   }
 });
 
@@ -547,6 +481,43 @@ app.post("/api/care-updates/:updateId/status", async (request, response) => {
     response.json({ update: transitioned });
   } catch (error) {
     const message = error instanceof z.ZodError ? error.message : "We could not update the review status.";
+    respondError(response, error instanceof z.ZodError ? 400 : 422, message);
+  }
+});
+
+app.post("/api/care-updates/:updateId/handover-feedback", async (request, response) => {
+  const user = await requireAuthenticatedUser(request, response);
+  const client = configuredService(response);
+  if (!user || !client) return;
+  const rate = feedbackRateLimiter.check(user.id);
+  if (!rate.allowed) {
+    response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
+    respondError(response, 429, "Please wait a moment before recording more feedback.");
+    return;
+  }
+  try {
+    const input = feedbackRequestSchema.parse(request.body ?? {});
+    const actor = await loadActor(client, user.id);
+    const update = actor ? await authorizeClinicianAccess(client, actor, request.params.updateId) : null;
+    if (!actor || !update) {
+      respondError(response, 403, "Only the assigned clinician can record handover feedback.");
+      return;
+    }
+    const { data, error } = await client.rpc("create_care_update_handover_feedback_from_server", {
+      p_update_id: update.id,
+      p_clinician_id: actor.id,
+      p_outcome: input.outcome,
+      p_note: input.note || null,
+    });
+    const feedback = Array.isArray(data) ? data[0] : data;
+    if (error?.code === "P0001") {
+      respondError(response, 403, "Only the assigned clinician can record handover feedback.");
+      return;
+    }
+    if (error || !feedback) throw new Error("The handover feedback could not be recorded.");
+    response.status(201).json({ feedback });
+  } catch (error) {
+    const message = error instanceof z.ZodError ? error.message : "We could not record handover feedback.";
     respondError(response, error instanceof z.ZodError ? 400 : 422, message);
   }
 });
