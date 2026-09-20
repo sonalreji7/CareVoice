@@ -25,6 +25,9 @@ type CareUpdate = {
 type PatientRecord = { id: string; profile_id: string; quick_summary?: string | null };
 type Assignment = { caregiver_id: string; patient_id: string; created_at: string };
 type ClinicianAssignment = { clinician_id: string; patient_id: string; created_at: string };
+type LinkedPatient = { id: string; name: string; quickSummary: string };
+
+const caregiverPriorityReason = "Caregiver explicitly requested a priority callback.";
 
 const roleLabels: Record<Role, string> = {
   patient: "Patient",
@@ -103,6 +106,7 @@ export function CarePortal() {
   const [patientId, setPatientId] = useState("");
   const [linkedName, setLinkedName] = useState("");
   const [quickSummary, setQuickSummary] = useState("");
+  const [linkedPatients, setLinkedPatients] = useState<LinkedPatient[]>([]);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [engine, setEngine] = useState<Engine>(null);
@@ -151,6 +155,7 @@ export function CarePortal() {
         setPatientId("");
         setLinkedName("");
         setQuickSummary("");
+        setLinkedPatients([]);
 
         if (next.role === "patient") {
           const { data: patient, error: patientError } = await client.from("patients").select("id, quick_summary").eq("profile_id", next.id).single();
@@ -162,16 +167,20 @@ export function CarePortal() {
           setQuickSummary(patient.quick_summary || "");
           setUpdates(rows as CareUpdate[]);
         } else if (next.role === "caregiver") {
-          const { data: link, error: linkError } = await client.from("caregiver_patient_assignments").select("patient_id, patients(quick_summary, profiles!patients_profile_id_fkey(display_name))").limit(1).maybeSingle();
+          const { data: links, error: linkError } = await client.from("caregiver_patient_assignments").select("patient_id, patients(quick_summary, profiles!patients_profile_id_fkey(display_name))").order("created_at", { ascending: true });
           if (linkError) throw linkError;
-          if (!link) { setNotice("Your account has not yet been linked to a person in your care."); return; }
-          const patient = link.patients as { quick_summary?: string; profiles?: { display_name?: string } } | null;
-          const { data: rows, error: rowsError } = await client.from("care_updates").select("*").eq("patient_id", link.patient_id).order("created_at", { ascending: false });
+          if (!links?.length) { setNotice("Your account has not yet been linked to a person in your care."); return; }
+          const contexts = links.map((link) => {
+            const patient = link.patients as { quick_summary?: string; profiles?: { display_name?: string } } | null;
+            return { id: link.patient_id, name: patient?.profiles?.display_name || "Person in your care", quickSummary: patient?.quick_summary || "" };
+          });
+          const { data: rows, error: rowsError } = await client.from("care_updates").select("*").in("patient_id", contexts.map((patient) => patient.id)).order("created_at", { ascending: false });
           if (rowsError) throw rowsError;
           if (!live) return;
-          setPatientId(link.patient_id);
-          setLinkedName(patient?.profiles?.display_name || "Person in your care");
-          setQuickSummary(patient?.quick_summary || "");
+          setPatientId(contexts[0].id);
+          setLinkedName(contexts[0].name);
+          setQuickSummary(contexts[0].quickSummary);
+          setLinkedPatients(contexts);
           setUpdates(rows as CareUpdate[]);
         } else if (next.role === "clinician") {
           const { data: rows, error: rowsError } = await client.from("care_updates").select("*, patients(quick_summary, profiles!patients_profile_id_fkey(display_name))").order("created_at", { ascending: false });
@@ -198,7 +207,7 @@ export function CarePortal() {
     {notice && <p className="notice mt-5" role="status">{notice}</p>}
     {profile.role !== "admin" && <DemoModeNotice engine={engine} />}
     {profile.role !== "admin" && <SecureWritesNotice configured={secureWritesConfigured} />}
-    {profile.role === "admin" ? <AdminPanel currentUserId={profile.id} /> : profile.role === "clinician" ? <ClinicianUpdates updates={updates} session={session} setUpdates={setUpdates} /> : <PrivateUpdates role={profile.role} patientId={patientId} linkedName={linkedName} quickSummary={quickSummary} updates={updates} session={session} profile={profile} engine={engine} setEngine={setEngine} setUpdates={setUpdates} setNotice={setNotice} />}
+    {profile.role === "admin" ? <AdminPanel currentUserId={profile.id} /> : profile.role === "clinician" ? <ClinicianUpdates updates={updates} session={session} setUpdates={setUpdates} /> : <PrivateUpdates role={profile.role} patientId={patientId} linkedName={linkedName} quickSummary={quickSummary} linkedPatients={linkedPatients} updates={updates} session={session} profile={profile} engine={engine} setEngine={setEngine} setUpdates={setUpdates} setNotice={setNotice} />}
   </div>;
 }
 
@@ -233,7 +242,7 @@ function PriorityExplanation({ reasons }: { reasons: string[] }) {
   return <p className="mt-4 rounded-lg bg-[#fff4d6] p-3 text-sm"><strong>Priority review request:</strong> {reasons.join(" ")}</p>;
 }
 
-function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, session, engine, setEngine, setUpdates, setNotice }: { role: "patient" | "caregiver"; patientId: string; linkedName: string; quickSummary: string; updates: CareUpdate[]; session: Session; profile: Profile; engine: Engine; setEngine: (engine: Engine) => void; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void }) {
+function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatients, updates, session, engine, setEngine, setUpdates, setNotice }: { role: "patient" | "caregiver"; patientId: string; linkedName: string; quickSummary: string; linkedPatients: LinkedPatient[]; updates: CareUpdate[]; session: Session; profile: Profile; engine: Engine; setEngine: (engine: Engine) => void; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void }) {
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -242,7 +251,12 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
   const [clarificationAnswer, setClarificationAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const [rebuildingId, setRebuildingId] = useState("");
-  const canContinue = Boolean(patientId && message.trim() && consent);
+  const [selectedPatientId, setSelectedPatientId] = useState(patientId);
+  const activePatientId = role === "caregiver" ? selectedPatientId : patientId;
+  const activeLinkedPatient = role === "caregiver" ? linkedPatients.find((patient) => patient.id === activePatientId) : null;
+  const activeName = activeLinkedPatient?.name || linkedName;
+  const activeQuickSummary = activeLinkedPatient?.quickSummary || quickSummary;
+  const canContinue = Boolean(activePatientId && message.trim() && consent);
 
   async function prepareDraft(answers: Partial<Record<ClarificationField, string>> = {}) {
     setBusy(true);
@@ -251,7 +265,7 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
       const response = await fetch(apiUrl("/api/care-update-drafts"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ patientId, originalMessage: message, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: answers }),
+        body: JSON.stringify({ patientId: activePatientId, originalMessage: message, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: answers }),
       });
       const body = await response.json() as Partial<Draft> & { error?: string };
       if (!response.ok || !body.draftId || !body.extraction || !body.originalMessage) throw new Error(body.error || "We could not prepare the structured handover.");
@@ -275,7 +289,7 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
       const response = await fetch(apiUrl("/api/care-updates"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ draftId: activeDraft.draftId, patientId, originalMessage: activeDraft.originalMessage, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: {} }),
+        body: JSON.stringify({ draftId: activeDraft.draftId, patientId: activePatientId, originalMessage: activeDraft.originalMessage, caregiverCallbackRequested: role === "caregiver" && priority, clarificationAnswers: {} }),
       });
       const body = await response.json() as { update?: CareUpdate; error?: string };
       if (!response.ok || !body.update) throw new Error(body.error || "We could not share the update.");
@@ -286,9 +300,14 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
       const { data: persistedUpdates, error: refreshError } = await supabase()
         .from("care_updates")
         .select("*")
-        .eq("patient_id", patientId)
+        .eq("patient_id", activePatientId)
         .order("created_at", { ascending: false });
-      if (!refreshError && persistedUpdates) setUpdates(persistedUpdates as CareUpdate[]);
+      if (!refreshError && persistedUpdates) {
+        const refreshed = persistedUpdates as CareUpdate[];
+        setUpdates((current) => role === "caregiver"
+          ? [...current.filter((item) => item.patient_id !== activePatientId), ...refreshed].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+          : refreshed);
+      }
       setMessage(""); setConsent(false); setPriority(false); setDraft(null); setStage("compose");
       setNotice(body.update.priority_reasons?.length ? "Your update was shared and includes a deterministic priority review request." : "Your update has been shared with the care team.");
     } catch (error) {
@@ -332,12 +351,12 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, updates, se
   }
 
   return <div className="mt-8 grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
-    <section className="space-y-5"><div className="card p-6"><p className="eyebrow">{role === "caregiver" ? "Person in your care" : "Your quick summary"}</p><h2 className="mt-2 text-xl font-bold">{role === "caregiver" ? linkedName : "Recent care context"}</h2><p className="mt-3 leading-6 text-[#5d7078]">{quickSummary || latestReportedChange(updates[0]) || "No care summary has been provided yet."}</p></div></section>
+    <section className="space-y-5"><div className="card p-6"><p className="eyebrow">{role === "caregiver" ? "Person in your care" : "Your quick summary"}</p><h2 className="mt-2 text-xl font-bold">{role === "caregiver" ? activeName : "Recent care context"}</h2>{role === "caregiver" && linkedPatients.length > 1 && <label className="mt-4 block"><span className="label">Choose a person</span><select className="field" value={activePatientId} onChange={(event) => setSelectedPatientId(event.target.value)}>{linkedPatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>}<p className="mt-3 leading-6 text-[#5d7078]">{activeQuickSummary || latestReportedChange(updates.find((item) => item.patient_id === activePatientId)) || "No care summary has been provided yet."}</p></div></section>
     <section className="card p-6">
       {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your original words remain available for review with the structured handover.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Share update"}</button></form>}
       {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => void share(draft)} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}
     </section>
-    <section className="card p-6 lg:col-span-2"><h2 className="text-xl font-bold">Your updates</h2><div className="mt-4 space-y-4">{updates.length ? updates.map((item) => <UpdateCard key={item.id} item={item} onRebuild={() => void rebuildHandover(item.id)} rebuilding={rebuildingId === item.id} />) : <p className="text-[#5d7078]">No updates have been shared yet.</p>}</div></section>
+    {role === "caregiver" ? <CaregiverUpdates updates={updates} patients={linkedPatients} session={session} setUpdates={setUpdates} setNotice={setNotice} onRebuild={rebuildHandover} rebuildingId={rebuildingId} /> : <section className="card p-6 lg:col-span-2"><h2 className="text-xl font-bold">Your updates</h2><div className="mt-4 space-y-4">{updates.length ? updates.map((item) => <UpdateCard key={item.id} item={item} onRebuild={() => void rebuildHandover(item.id)} rebuilding={rebuildingId === item.id} />) : <p className="text-[#5d7078]">No updates have been shared yet.</p>}</div></section>}
   </div>;
 }
 
@@ -351,9 +370,62 @@ function UpdateCard({ item, onRebuild, rebuilding }: { item: CareUpdate; onRebui
   return <article className="rounded-xl border border-[#cfe2dd] p-4"><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} />{unavailable && onRebuild && <button type="button" className="btn btn-secondary mt-3" disabled={rebuilding} onClick={onRebuild}>{rebuilding ? "Building handover…" : "Create structured handover"}</button>}<details className="mt-3"><summary className="cursor-pointer font-bold text-[#0d766e]">See original words</summary><p className="mt-2 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>;
 }
 
+type PatientUpdateGroup = { patientId: string; name: string; quickSummary: string; updates: CareUpdate[]; priorityCount: number; firstRank: number };
+
+function reviewRank(item: CareUpdate) {
+  if (item.status !== "closed" && item.priority_reasons?.length) return 0;
+  if (item.status === "new") return 1;
+  if (item.status === "acknowledged") return 2;
+  return 3;
+}
+
+function orderedUpdateGroups(updates: CareUpdate[], patients: LinkedPatient[] = [], fallbackName = "Patient") {
+  const contexts = new Map(patients.map((patient) => [patient.id, patient]));
+  const groups = new Map<string, PatientUpdateGroup>();
+  for (const patient of patients) groups.set(patient.id, { patientId: patient.id, name: patient.name, quickSummary: patient.quickSummary, updates: [], priorityCount: 0, firstRank: 4 });
+  for (const item of [...updates].sort((left, right) => reviewRank(left) - reviewRank(right) || Date.parse(right.created_at) - Date.parse(left.created_at))) {
+    const context = contexts.get(item.patient_id);
+    const existing = groups.get(item.patient_id) || {
+      patientId: item.patient_id,
+      name: item.patients?.profiles?.display_name || fallbackName,
+      quickSummary: item.patients?.quick_summary || "",
+      updates: [],
+      priorityCount: 0,
+      firstRank: reviewRank(item),
+    };
+    existing.updates.push(item);
+    existing.priorityCount += item.status !== "closed" && item.priority_reasons?.length ? 1 : 0;
+    existing.firstRank = Math.min(existing.firstRank, reviewRank(item));
+    groups.set(item.patient_id, existing);
+  }
+  return [...groups.values()].sort((left, right) => left.firstRank - right.firstRank || Date.parse(right.updates[0]?.created_at || "0") - Date.parse(left.updates[0]?.created_at || "0"));
+}
+
+function CaregiverUpdates({ updates, patients, session, setUpdates, setNotice, onRebuild, rebuildingId }: { updates: CareUpdate[]; patients: LinkedPatient[]; session: Session; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void; onRebuild: (updateId: string) => Promise<void>; rebuildingId: string }) {
+  const [busyId, setBusyId] = useState("");
+  const groups = useMemo(() => orderedUpdateGroups(updates, patients, "Person in your care"), [updates, patients]);
+
+  async function requestPriorityReview(id: string) {
+    setBusyId(id);
+    setNotice("");
+    try {
+      const response = await fetch(apiUrl(`/api/care-updates/${id}/escalate`), { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
+      const body = await response.json() as { update?: CareUpdate; error?: string };
+      if (!response.ok || !body.update) throw new Error(body.error || "We could not request a priority review.");
+      setUpdates((current) => current.map((item) => item.id === id ? body.update as CareUpdate : item));
+      setNotice("Priority review requested for the care team.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "We could not request a priority review.");
+    } finally { setBusyId(""); }
+  }
+
+  return <section className="card p-6 lg:col-span-2"><p className="eyebrow">Care updates by person</p><h2 className="mt-2 text-xl font-bold">Updates in your care</h2><p className="mt-2 text-[#5d7078]">Open a person to review their updates and explicitly request a priority review when needed.</p><div className="mt-5 space-y-3">{groups.length ? groups.map((group) => <details key={group.patientId} className="rounded-xl border border-[#cfe2dd] bg-white p-4"><summary className="cursor-pointer list-none"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{group.name}</h3><p className="mt-1 text-sm text-[#5d7078]">{group.updates.length} update{group.updates.length === 1 ? "" : "s"}{group.priorityCount ? ` · ${group.priorityCount} priority` : ""}</p></div><span className="text-sm font-bold text-[#0d766e]">Open updates</span></div></summary>{group.quickSummary && <p className="mt-4 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">{group.quickSummary}</p>}<div className="mt-4 space-y-4">{group.updates.length ? group.updates.map((item) => { const alreadyRequested = item.priority_reasons?.includes(caregiverPriorityReason); const isClosed = item.status === "closed"; return <div key={item.id}><UpdateCard item={item} onRebuild={() => void onRebuild(item.id)} rebuilding={rebuildingId === item.id} /><div className="mt-3 flex flex-wrap items-center gap-3">{isClosed ? <span className="text-sm text-[#5d7078]">This closed update cannot be escalated.</span> : <button type="button" className="btn btn-secondary" disabled={busyId === item.id || alreadyRequested} onClick={() => void requestPriorityReview(item.id)}>{alreadyRequested ? "Priority review requested" : busyId === item.id ? "Requesting…" : "Request priority review"}</button>} {!isClosed && !alreadyRequested && <span className="text-sm text-[#5d7078]">This sends an explicit request to the clinician queue.</span>}</div></div>; }) : <p className="text-[#5d7078]">No updates have been shared for this person yet.</p>}</div></details>) : <p className="text-[#5d7078]">No people are linked to this account yet.</p>}</div></section>;
+}
+
 function ClinicianUpdates({ updates, session, setUpdates }: { updates: CareUpdate[]; session: Session; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void }) {
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState("");
+  const groups = useMemo(() => orderedUpdateGroups(updates), [updates]);
   async function updateStatus(id: string, status: "acknowledged" | "closed") {
     setBusyId(id); setNotice("");
     try {
@@ -365,7 +437,7 @@ function ClinicianUpdates({ updates, session, setUpdates }: { updates: CareUpdat
       setNotice(error instanceof Error ? error.message : "We could not update the review status.");
     } finally { setBusyId(""); }
   }
-  return <section className="card mt-8 p-6"><p className="eyebrow">Executive summary</p><h2 className="mt-2 text-2xl font-bold">Care updates for review</h2><p className="mt-2 text-[#5d7078]">Open supporting information only when it is needed for review.</p>{notice && <p className="notice mt-4" role="alert">{notice}</p>}<div className="mt-6 space-y-4">{updates.length ? updates.map((item) => <article key={item.id} className="rounded-xl border border-[#cfe2dd] p-5"><div className="flex flex-wrap justify-between gap-3"><div><h3 className="text-lg font-bold">{item.patients?.profiles?.display_name || "Patient"}</h3><p className="text-sm text-[#5d7078]">{new Date(item.created_at).toLocaleString()}</p></div><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></div><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} /><div className="mt-4 flex flex-wrap gap-2">{item.status === "new" && <button className="btn btn-secondary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "acknowledged")}>Acknowledge</button>}{item.status === "acknowledged" && <button className="btn btn-primary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "closed")}>Close</button>}</div><details className="mt-4 rounded-lg bg-[#f5faf9] p-4"><summary className="cursor-pointer font-bold">Additional information</summary><p className="mt-3 text-sm font-bold">Original words</p><p className="mt-1 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>) : <p className="text-[#5d7078]">No care updates are currently available to you.</p>}</div></section>;
+  return <section className="card mt-8 p-6"><p className="eyebrow">Executive summary</p><h2 className="mt-2 text-2xl font-bold">Care updates for review</h2><p className="mt-2 text-[#5d7078]">People with active priority requests appear first. Open a person only when more detail is needed.</p>{notice && <p className="notice mt-4" role="alert">{notice}</p>}<div className="mt-6 space-y-3">{groups.length ? groups.map((group) => <details key={group.patientId} open={group.firstRank === 0} className="rounded-xl border border-[#cfe2dd] bg-white p-5"><summary className="cursor-pointer list-none"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{group.name}</h3><p className="mt-1 text-sm text-[#5d7078]">{group.updates.length} update{group.updates.length === 1 ? "" : "s"}{group.priorityCount ? ` · ${group.priorityCount} priority` : ""}</p></div>{group.priorityCount ? <span className="badge status-priority">priority</span> : <span className="text-sm font-bold text-[#0d766e]">Open review</span>}</div></summary>{group.quickSummary && <p className="mt-4 rounded-lg bg-[#f5faf9] p-3 text-sm text-[#52696e]">{group.quickSummary}</p>}<div className="mt-4 space-y-4">{group.updates.map((item) => <article key={item.id} className="rounded-xl border border-[#e3efec] p-4"><div className="flex flex-wrap justify-between gap-3"><p className="text-sm text-[#5d7078]">{new Date(item.created_at).toLocaleString()}</p><span className={`badge ${statusClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></div><PriorityExplanation reasons={item.priority_reasons || []} /><HandoverPreview summary={item.agent_summary} /><div className="mt-4 flex flex-wrap gap-2">{item.status === "new" && <button className="btn btn-secondary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "acknowledged")}>Acknowledge</button>}{item.status === "acknowledged" && <button className="btn btn-primary" disabled={busyId === item.id} onClick={() => void updateStatus(item.id, "closed")}>Close</button>}</div><details className="mt-4 rounded-lg bg-[#f5faf9] p-4"><summary className="cursor-pointer font-bold">Additional information</summary><p className="mt-3 text-sm font-bold">Original words</p><p className="mt-1 whitespace-pre-wrap text-[#52696e]">{item.original_message}</p></details></article>)}</div></details>) : <p className="text-[#5d7078]">No care updates are currently available to you.</p>}</div></section>;
 }
 
 function AdminPanel({ currentUserId }: { currentUserId: string }) {

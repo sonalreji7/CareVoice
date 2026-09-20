@@ -49,6 +49,7 @@ const draftRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const shareRateLimiter = createFixedWindowRateLimiter(10, 60_000);
 const audioRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const rebuildRateLimiter = createFixedWindowRateLimiter(6, 60_000);
+const escalationRateLimiter = createFixedWindowRateLimiter(6, 60_000);
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const supportedAudioTypes = new Set(["audio/webm", "audio/ogg", "audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]);
 const draftRequestSchema = z.object({
@@ -133,6 +134,17 @@ async function authorizeHandoverRebuild(client: SupabaseClient, actor: Actor, up
   const { data: update, error } = await client
     .from("care_updates")
     .select("id, patient_id, original_message")
+    .eq("id", updateId)
+    .maybeSingle();
+  if (error || !update || !await authorizeSubmission(client, actor, update.patient_id)) return null;
+  return update;
+}
+
+async function authorizeCaregiverEscalation(client: SupabaseClient, actor: Actor, updateId: string) {
+  if (actor.role !== "caregiver") return null;
+  const { data: update, error } = await client
+    .from("care_updates")
+    .select("id, patient_id")
     .eq("id", updateId)
     .maybeSingle();
   if (error || !update || !await authorizeSubmission(client, actor, update.patient_id)) return null;
@@ -338,6 +350,39 @@ app.post("/api/care-updates/:updateId/rebuild-handover", async (request, respons
     response.json({ update: refreshed, mode: result.mode });
   } catch {
     respondError(response, 422, "We could not refresh this structured handover. You can continue to review the original message.");
+  }
+});
+
+app.post("/api/care-updates/:updateId/escalate", async (request, response) => {
+  const user = await requireAuthenticatedUser(request, response);
+  const client = configuredService(response);
+  if (!user || !client) return;
+  const rate = escalationRateLimiter.check(user.id);
+  if (!rate.allowed) {
+    response.setHeader("Retry-After", Math.ceil(rate.retryAfterMs / 1_000));
+    respondError(response, 429, "Please wait a moment before requesting another priority review.");
+    return;
+  }
+  try {
+    const actor = await loadActor(client, user.id);
+    const update = actor ? await authorizeCaregiverEscalation(client, actor, request.params.updateId) : null;
+    if (!actor || !update) {
+      respondError(response, 403, "Only an assigned caregiver can request a priority review.");
+      return;
+    }
+    const { data, error } = await client.rpc("request_care_update_priority_from_server", {
+      p_update_id: update.id,
+      p_actor_id: actor.id,
+    });
+    const escalated = Array.isArray(data) ? data[0] : data;
+    if (error?.code === "P0001") {
+      respondError(response, 409, "This update cannot be escalated.");
+      return;
+    }
+    if (error || !escalated) throw new Error("The priority review could not be requested.");
+    response.json({ update: escalated });
+  } catch {
+    respondError(response, 422, "We could not request a priority review. Please try again.");
   }
 });
 
