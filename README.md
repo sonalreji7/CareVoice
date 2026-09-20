@@ -1,41 +1,85 @@
 # CareVoice Relay
 
-CareVoice Relay is a hackathon prototype for structured, reviewable palliative-care handovers. Patients and caregivers share their own words; clinicians see a consistent evidence-backed handover alongside the original message. It is not a diagnostic, treatment, medication, triage, or emergency service.
+## Overview
 
-## What it does
+CareVoice Relay is a hackathon prototype for structured, reviewable palliative-care handovers. Patients and caregivers share updates in their own words; assigned clinicians see a consistent, evidence-backed handover alongside the complete original message.
 
-- Gives patients and caregivers a private update workflow with typed input and optional, editable voice recording/transcription.
-- Shares after the explicit consent checkbox. A user can optionally answer one non-clinical clarification at a time, or skip it.
-- Creates a handover only from complete sentences in the submitted words. Every displayed field is duplicated in source evidence; no model-written clinical prose is shown.
-- Shows `Structured handover unavailable — review the original message.` when extraction cannot be verified. This safe demo-mode fallback does not invent facts.
-- Uses deterministic priority rules only: an explicit caregiver callback request or the clinician-owned “normal daily care cannot continue” rule. Urgent-sounding text alone does not create priority.
-- Scopes caregivers and clinicians to explicit patient assignments, and gives administrators access-management controls without access to care updates.
-- Records trusted review transitions (`new → acknowledged → closed`) with database-owned timestamps and immutable audit events.
+It is **not** a diagnostic, treatment, medication, triage, or emergency service. The clinician remains the decision-maker.
 
-The interface keeps persistent **Not an emergency service** and **Prototype only** notices. Voice recognition requires an acknowledgement before it starts and states that speech processing is provided by the browser or its speech provider; CareVoice does not store audio.
+## Problem Statement
 
-## Evaluator guide
+Caregivers often describe changes in a person's condition using long, ordinary language: fatigue, disrupted sleep, difficulty moving, appetite changes, or a request for help. A clinician needs to understand those updates quickly, but a generic AI summary can lose a negation, invent a detail, or make an unsupported medical inference.
 
-This repository is designed to be judged from evidence rather than promises. Start with the architecture below, then use these paths to verify the core claims.
+The problem is not a lack of generated clinical prose. It is the risk of losing the caregiver's original meaning during handover.
 
-| Claim | Evidence in this repository |
-| --- | --- |
-| The model cannot author a clinical handover | [`core-engine/src/extraction.ts`](core-engine/src/extraction.ts) gives the model only source-sentence IDs and tags, then materialises display text on the server. |
-| Invented facts and lost negations are rejected | [`tests/extraction.test.ts`](tests/extraction.test.ts) covers invented facts, altered evidence, negations, prompt-like text, and mixed-language updates. |
-| A user must review before an update is persisted | [`tests/workflow-contract.test.ts`](tests/workflow-contract.test.ts) verifies the explicit confirmation step. |
-| Browser clients cannot directly write care updates | [`database/supabase/migrations/202609200009_server_owned_care_updates.sql`](database/supabase/migrations/202609200009_server_owned_care_updates.sql) revokes browser writes and exposes service-role-only RPCs. |
-| Access and feedback are assignment-scoped | [`tests/security-migration.test.ts`](tests/security-migration.test.ts) verifies clinician assignment, server-only feedback, and restricted database permissions. |
+## Solution
 
-For a reproducible fictional demo, see [`docs/JUDGE-GUIDE.md`](docs/JUDGE-GUIDE.md). For the deliberate product and safety trade-offs, see [`docs/DECISIONS.md`](docs/DECISIONS.md).
+CareVoice Relay turns a caregiver's free-text update into a reviewable handover without letting AI write new clinical facts.
 
-## Architecture
+The OpenAI-backed selector receives numbered source sentences and can return only source-sentence IDs and predefined tags. The server validates every selected sentence against the original message, constructs the visible handover locally, and falls back to the original words if output cannot be verified. The caregiver reviews and explicitly confirms the update before a trusted backend persists it. Only assigned clinicians can review, acknowledge, close, or provide quality feedback on an update.
 
-```
+## Features
+
+- Typed care updates and optional, editable voice transcription.
+- Explicit consent before sharing and one optional non-clinical clarification at a time.
+- Evidence-backed handovers created only from complete sentences in the submitted update; no model-written clinical prose is shown.
+- A safe fallback: `Structured handover unavailable — review the original message.` No generated facts are saved when extraction cannot be verified.
+- Deterministic priority-review reasons: a caregiver's explicit callback request or the clinician-owned “normal daily care cannot continue” rule. Urgent-sounding language alone never becomes a medical urgency decision.
+- Role-specific patient, caregiver, clinician, and administrator workflows with explicit patient assignments.
+- Caregiver review-before-share and clinician lifecycle controls: `new → acknowledged → closed`.
+- Database-owned timestamps, immutable review events, and clinician handover-quality feedback kept separate from the original care update.
+- Fictional offline demo mode using deterministic exact-source tags, plus a separate OpenAI-backed extraction mode.
+
+The interface keeps persistent **Not an emergency service** and **Prototype only** notices. Voice input requires acknowledgement before recording, and the resulting text remains editable before sharing.
+
+## Tech Stack
+
+- **Frontend:** Next.js, React, TypeScript, CSS.
+- **Backend:** Node.js, Express, TypeScript, a dedicated CareVoice core engine.
+- **Database:** Supabase PostgreSQL, Row Level Security, SQL migrations, server-owned RPCs.
+- **APIs / Services:** Supabase Auth, OpenAI Agents SDK for constrained source selection, OpenAI transcription API for optional voice input.
+- **Hosting / Deployment:** Local development workflow supplied; no production deployment is claimed for this prototype.
+- **Other Tools:** Zod schema validation, Node test runner, TypeScript, ESLint, Mermaid architecture diagrams, npm workspaces.
+
+## Codex / OpenAI Usage
+
+Codex was used during the hackathon as a development collaborator for ideation, threat-modeling, architecture planning, implementation, debugging, test design, documentation, and the reviewer-facing repository structure.
+
+OpenAI services are used in the application in two constrained ways:
+
+- The OpenAI Agents SDK selects only numbered source-sentence IDs and allowed tags for a handover. It is not allowed to diagnose, decide urgency, prescribe, or author clinician-facing prose.
+- The optional voice-input path uses OpenAI transcription to convert a recording into editable text before the caregiver reviews it.
+
+The project also includes a clearly labelled deterministic fictional demo mode. This allows an evaluator to inspect the complete workflow without an API key; it is not represented as live AI processing.
+
+## Demo
+
+### Live Demo
+
+No public deployment is currently provided. The reproducible fictional demo can be run locally using the steps below.
+
+### Demo / Pitch Video
+
+No video is currently included. A short recording of the fictional caregiver-to-clinician flow is recommended before final submission: load the fictional plain-language update, show the source-backed review, confirm it, then show the assigned clinician queue and feedback flow.
+
+## Screenshots
+
+No screenshots are committed yet. Before submission, add only fictional-data screenshots that show:
+
+1. The caregiver's long, plain-language update.
+2. The review screen, including original words and the exact-source handover.
+3. The clinician queue, lifecycle controls, and handover-quality feedback.
+
+The architecture and data-processing diagrams below are included now so repository reviewers can understand the workflow without running the application.
+
+## Architecture and Data Processing
+
+```text
 frontend/       Next.js role-specific interfaces
 backend/        Express authentication, draft, trusted-save, and status APIs
 database/       Supabase migrations, RLS, RPCs, assignments, and audit schema
 core-engine/    Evidence-backed extraction contract and deterministic priority rules
-tests/          Unit, static security, and fictional evaluation coverage
+tests/          Unit, static-security, and fictional evaluation coverage
 ```
 
 ### System architecture
@@ -89,45 +133,60 @@ flowchart TD
 
 **Safety boundary:** the model is never allowed to diagnose, prescribe, determine medical urgency, author a clinical summary, or persist data directly. It may only select submitted sentence IDs and predefined tags; the server validates and stores the final handover.
 
-## Secure setup
+## How to Run Locally
 
-1. Copy [.env.example](.env.example) to `.env.local`. It is ignored by Git.
-2. Add the Supabase URL and publishable key. These are the only Supabase values used by the browser.
-3. Add `SUPABASE_SERVICE_ROLE_KEY` **only** to root `.env.local`, never a `NEXT_PUBLIC_*` variable or `frontend/.env.local`. The backend uses it only after validating the bearer token and assignment for every trusted read/write.
-4. Add `OPENAI_API_KEY` to root `.env.local` to enable the constrained extraction agent. Without it, the UI visibly runs in safe **Demo mode** and saves no generated handover facts.
-5. Apply all migrations in `database/supabase/migrations/`, then use the administrator pane to assign a clinician to the fictional patient used in your demo.
-6. Run `npm install && npm run dev`.
+```bash
+git clone https://github.com/sonalreji7/CareVoice.git
+cd CareVoice
+cp .env.example .env.local
+npm install
+```
 
-### Fictional hackathon demo
+Configure the Supabase URL, publishable key, and server-only service-role key in `.env.local`, then apply every migration in `database/supabase/migrations/` to a dedicated Supabase project. Use `supabase db push` after linking the project, or apply the migration files in order through the Supabase SQL editor.
 
-To run the deterministic, no-API-key handover demonstration, set `CAREVOICE_DEMO_MODE=1` in the ignored root `.env.local`, then restart the backend. Demo mode uses only exact source sentences and visible tags; it is not an AI or clinical mode.
-
-Create the fictional patient, caregiver, clinician, and administrator accounts with:
+Then start the fictional demo:
 
 ```bash
 npm run seed:demo -- --reset-password
+npm run dev
 ```
 
-The command prints a temporary password once. Keep it private, do not commit it, and use the accounts only in the fictional demo environment.
+For the reproducible fictional demo, set `CAREVOICE_DEMO_MODE=1` and restart the backend. The seed command creates a fictional patient, caregiver, clinician, and administrator, then prints a temporary password once. Keep it private; do not commit it or use it with real health information.
 
-Do not put real credentials, shared demo passwords, or real patient information in this repository. Seeded accounts are local/demo-only and should be provisioned through Supabase Auth or a private deployment setup, not documented with shared passwords.
+For the OpenAI-backed path, set `CAREVOICE_DEMO_MODE=0`, provide `OPENAI_API_KEY`, and restart the backend. The same fictional update will then be processed by the constrained source selector.
 
-## Roles
+## Additional Notes
 
-- **Patient:** View and submit only personal updates.
-- **Caregiver:** View and submit only for explicitly linked patients; can request a priority callback.
-- **Clinician:** Read only explicitly assigned patients’ updates; acknowledge and close through the trusted backend flow.
-- **Administrator:** Manage non-admin roles and caregiver/clinician assignments; cannot read care updates just by being an administrator.
+### Roles
 
-## Hackathon walkthrough
+- **Patient:** Views and submits only personal updates.
+- **Caregiver:** Views and submits only for explicitly linked patients; can request a priority callback.
+- **Clinician:** Reads only explicitly assigned patients’ updates; acknowledges and closes them through the trusted backend flow.
+- **Administrator:** Manages non-admin roles and caregiver/clinician assignments; cannot read care updates merely by being an administrator.
 
-1. In the administrator pane, assign the fictional clinician to the fictional patient and confirm the caregiver link.
-2. Sign in as the seeded caregiver. Enter a short update, optionally record voice input, select **Request a priority callback**, and select **Share update**.
-3. If shown, answer or skip the one optional clarification. The update is then sent with its evidence-backed fields and deterministic priority explanation.
-4. Sign in as the assigned clinician. The update appears in the review queue even when no priority rule applied. Expand **Additional information** to see the original words, then select **Acknowledge**.
-5. Select **Close** after acknowledgement to demonstrate the enforced lifecycle and event audit.
+### Fictional hackathon walkthrough
 
-## Checks
+1. Sign in as the seeded fictional caregiver and select **Load detailed fictional update**.
+2. Select consent and **Request a priority callback**, then choose **Prepare review**.
+3. Review the original words and the structured, source-backed handover. Answer or skip the one optional clarification.
+4. Choose **Confirm and share**. Draft preparation alone does not save an update.
+5. Sign in as the fictional assigned clinician, open the update, review the original words, acknowledge it, close it, and optionally record handover-quality feedback.
+
+### Evaluator evidence
+
+This repository is designed to be judged from evidence rather than promises.
+
+| Claim | Evidence in this repository |
+| --- | --- |
+| The model cannot author a clinical handover | [`core-engine/src/extraction.ts`](core-engine/src/extraction.ts) gives the model only source-sentence IDs and tags, then materialises display text on the server. |
+| Invented facts and lost negations are rejected | [`tests/extraction.test.ts`](tests/extraction.test.ts) covers invented facts, altered evidence, negations, prompt-like text, and mixed-language updates. |
+| A user must review before an update is persisted | [`tests/workflow-contract.test.ts`](tests/workflow-contract.test.ts) verifies the explicit confirmation step. |
+| Browser clients cannot directly write care updates | [`database/supabase/migrations/202609200009_server_owned_care_updates.sql`](database/supabase/migrations/202609200009_server_owned_care_updates.sql) revokes browser writes and exposes service-role-only RPCs. |
+| Access and feedback are assignment-scoped | [`tests/security-migration.test.ts`](tests/security-migration.test.ts) verifies clinician assignment, server-only feedback, and restricted database permissions. |
+
+For a detailed reproducible walkthrough, see [`docs/JUDGE-GUIDE.md`](docs/JUDGE-GUIDE.md). For the deliberate product and safety trade-offs, see [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+### Checks
 
 ```bash
 npm test
@@ -136,4 +195,6 @@ npm run lint
 npm run build
 ```
 
-The tests use fictional text only. Before any real deployment, this prototype needs clinical governance, privacy and legal review, production rate limiting, security review, observability policy, incident procedures, backups, and live Supabase RLS acceptance tests. It does not claim clinical validation, medical safety certification, or production readiness.
+The tests use fictional text only. Two opt-in tests—a live OpenAI selector evaluation and a dedicated Supabase RLS integration test—are skipped by default because they require separately configured test services. They are not presented as completed clinical validation.
+
+Before any real deployment, this prototype needs clinical governance, privacy and legal review, production rate limiting, security review, observability policy, incident procedures, backups, durable drafts, clinician notification policy, and live Supabase RLS acceptance tests. It does not claim clinical validation, medical safety certification, or production readiness.
