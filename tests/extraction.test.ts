@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildStructuredHandover,
+  canonicalizePatientExperienceSummary,
   canonicalizeExtraction,
   isSafeGroundedExtraction,
   nextClarification,
@@ -122,4 +123,22 @@ test("unavailable mode creates no facts and only asks an approved non-clinical c
   assert.equal(JSON.stringify(fallback).includes("No specific change"), false);
   assert.deepEqual(nextClarification(fallback), { field: "timing", question: "When did this begin or change?" });
   assert.deepEqual(nextClarification(fallback, ["timing"]), { field: "comfort_or_daily_impact", question: "How is comfort or daily activity affected?" });
+});
+
+test("patient experience snapshot permits only distinct original sentences", () => {
+  const source = "Fictional Avery felt tired this morning. Walking to the kitchen felt difficult. Please let the care team know.";
+  assert.deepEqual(canonicalizePatientExperienceSummary(source, {
+    recent_change: "Fictional Avery felt tired this morning.",
+    impact_or_context: "Walking to the kitchen felt difficult.",
+    help_or_report: "Please let the care team know.",
+  }), {
+    recent_change: "Fictional Avery felt tired this morning.",
+    impact_or_context: "Walking to the kitchen felt difficult.",
+    help_or_report: "Please let the care team know.",
+  });
+  assert.equal(canonicalizePatientExperienceSummary(source, {
+    recent_change: "Avery has fatigue.",
+    impact_or_context: null,
+    help_or_report: null,
+  }), null);
 });

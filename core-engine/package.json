@@ -6,7 +6,8 @@
   "exports": {
     "./contracts": "./src/contracts.ts",
     "./priority": "./src/priority.ts",
-    "./extraction": "./src/extraction.ts"
+    "./extraction": "./src/extraction.ts",
+    "./blood-pressure": "./src/blood-pressure.ts"
   },
   "dependencies": {
     "@openai/agents": "0.18.0",

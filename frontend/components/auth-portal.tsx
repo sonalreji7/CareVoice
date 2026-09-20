@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import type { CareUpdateExtraction, ClarificationField, Extraction } from "@carevoice/core-engine/contracts";
@@ -26,6 +26,10 @@ type PatientRecord = { id: string; profile_id: string; quick_summary?: string | 
 type Assignment = { caregiver_id: string; patient_id: string; created_at: string };
 type ClinicianAssignment = { clinician_id: string; patient_id: string; created_at: string };
 type LinkedPatient = { id: string; name: string; quickSummary: string };
+type BloodPressureReference = { label: string; detail: string; urgency: "routine" | "contact_clinician" | "urgent" };
+type PatientReport = { id: string; report_label: string; reported_at: string; results_text: string; systolic: number | null; diastolic: number | null; created_at: string; bloodPressureReference: BloodPressureReference | null };
+type PatientExperienceSummary = { recent_change: string | null; impact_or_context: string | null; help_or_report: string | null };
+type PatientOverview = { summary: PatientExperienceSummary; summaryMode: "agent" | "unavailable"; reports: PatientReport[] };
 
 const caregiverPriorityReason = "Caregiver explicitly requested a priority callback.";
 
@@ -242,6 +246,66 @@ function PriorityExplanation({ reasons }: { reasons: string[] }) {
   return <p className="mt-4 rounded-lg bg-[#fff4d6] p-3 text-sm"><strong>Priority review request:</strong> {reasons.join(" ")}</p>;
 }
 
+function PatientTitleCard({ patientId, session, quickSummary, updates }: { patientId: string; session: Session; quickSummary: string; updates: CareUpdate[] }) {
+  const [overview, setOverview] = useState<PatientOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [reportLabel, setReportLabel] = useState("");
+  const [reportedAt, setReportedAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [resultsText, setResultsText] = useState("");
+  const [systolic, setSystolic] = useState("");
+  const [diastolic, setDiastolic] = useState("");
+  const [consent, setConsent] = useState(false);
+
+  const loadOverview = useCallback(async () => {
+    if (!patientId) return;
+    setLoading(true);
+    try {
+      const response = await fetch(apiUrl(`/api/patients/${patientId}/overview`), { headers: { Authorization: `Bearer ${session.access_token}` } });
+      const body = await response.json() as PatientOverview & { error?: string };
+      if (!response.ok) throw new Error(body.error || "We could not load your care snapshot.");
+      setOverview(body);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "We could not load your care snapshot.");
+    } finally { setLoading(false); }
+  }, [patientId, session.access_token]);
+
+  useEffect(() => { void loadOverview(); }, [loadOverview, updates]);
+
+  const hasCompleteBloodPressure = Boolean(systolic.trim() && diastolic.trim());
+  const hasPartialBloodPressure = Boolean(systolic.trim()) !== Boolean(diastolic.trim());
+  const canSaveReport = Boolean(reportLabel.trim() && reportedAt && consent && !hasPartialBloodPressure && (resultsText.trim() || hasCompleteBloodPressure));
+  const lines = [
+    { label: "Recent change", value: overview?.summary.recent_change },
+    { label: "Impact or context", value: overview?.summary.impact_or_context },
+    { label: "Help or report detail", value: overview?.summary.help_or_report },
+  ];
+
+  async function saveReport(event: FormEvent) {
+    event.preventDefault();
+    if (!canSaveReport) return;
+    setSaving(true);
+    setNotice("");
+    try {
+      const response = await fetch(apiUrl(`/api/patients/${patientId}/reports`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ reportLabel, reportedAt, resultsText, systolic: systolic ? Number(systolic) : null, diastolic: diastolic ? Number(diastolic) : null }),
+      });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "We could not save this report.");
+      setReportLabel(""); setResultsText(""); setSystolic(""); setDiastolic(""); setConsent(false);
+      setNotice("Your report was saved and shared with the care team.");
+      await loadOverview();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "We could not save this report.");
+    } finally { setSaving(false); }
+  }
+
+  return <div className="card p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="eyebrow">Your 3-line care snapshot</p><h2 className="mt-2 text-xl font-bold">What you have reported</h2></div><button type="button" className="btn btn-quiet" disabled={loading} onClick={() => void loadOverview()}>{loading ? "Refreshing…" : "Refresh snapshot"}</button></div><p className="mt-3 text-sm leading-6 text-[#5d7078]">AI-assisted organisation of your recorded words. It does not diagnose, prescribe, or replace clinical review.</p><div className="mt-4 space-y-3">{lines.map((line) => <div key={line.label} className="rounded-lg bg-[#f5faf9] p-3 text-sm"><p className="font-bold">{line.label}</p><p className="mt-1 text-[#52696e]">{line.value || "No user-provided detail is available."}</p></div>)}</div>{overview?.summaryMode === "unavailable" && <p className="mt-3 text-sm text-[#5d7078]">The structured snapshot is unavailable right now; your original updates remain available below.</p>}{!overview && !loading && <p className="mt-3 text-sm text-[#5d7078]">{quickSummary || latestReportedChange(updates[0]) || "No care summary has been provided yet."}</p>}<details className="mt-5 rounded-xl border border-[#cfe2dd] p-4"><summary className="cursor-pointer font-bold text-[#0d766e]">Log a lab report or blood-pressure reading</summary><p className="mt-3 text-sm leading-6 text-[#5d7078]">Enter report text in your own words. Optional blood-pressure flags use general adult reference ranges only; they are not a diagnosis.</p><form className="mt-4 space-y-4" onSubmit={saveReport}><div className="grid gap-4 md:grid-cols-2"><label><span className="label">Report title</span><input className="field" required maxLength={120} value={reportLabel} onChange={(event) => setReportLabel(event.target.value)} placeholder="For example: Blood test results" /></label><label><span className="label">Report date</span><input className="field" required type="date" value={reportedAt} onChange={(event) => setReportedAt(event.target.value)} /></label></div><label className="block"><span className="label">Report details</span><textarea className="field min-h-28" maxLength={5000} value={resultsText} onChange={(event) => setResultsText(event.target.value)} placeholder="Type the result or notes exactly as you received them." /></label><div className="grid gap-4 md:grid-cols-2"><label><span className="label">Systolic (top number, optional)</span><input className="field" inputMode="numeric" min="40" max="300" type="number" value={systolic} onChange={(event) => setSystolic(event.target.value)} /></label><label><span className="label">Diastolic (bottom number, optional)</span><input className="field" inputMode="numeric" min="20" max="200" type="number" value={diastolic} onChange={(event) => setDiastolic(event.target.value)} /></label></div>{hasPartialBloodPressure && <p className="text-sm text-[#9d3d25]" role="alert">Enter both blood-pressure values together.</p>}<Check value={consent} setValue={setConsent} label="I consent to share this report with the care team and use AI-assisted organisation." /><button className="btn btn-primary" disabled={!canSaveReport || saving}>{saving ? "Saving…" : "Save report"}</button></form></details><details className="mt-4"><summary className="cursor-pointer font-bold text-[#0d766e]">View logged reports and readings</summary><div className="mt-3 space-y-3">{overview?.reports.length ? overview.reports.map((report) => <article key={report.id} className="rounded-xl border border-[#cfe2dd] p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-bold">{report.report_label}</h3><p className="text-sm text-[#5d7078]">{report.reported_at}</p></div>{report.results_text && <p className="mt-3 whitespace-pre-wrap text-sm text-[#52696e]">{report.results_text}</p>}{report.systolic != null && <p className="mt-3 text-sm"><strong>Blood pressure entered:</strong> {report.systolic}/{report.diastolic} mm Hg</p>}{report.bloodPressureReference && <p className={`mt-3 rounded-lg p-3 text-sm ${report.bloodPressureReference.urgency === "urgent" ? "bg-[#fff4e7]" : "bg-[#f5faf9]"}`}><strong>{report.bloodPressureReference.label}:</strong> {report.bloodPressureReference.detail}</p>}</article>) : <p className="text-sm text-[#5d7078]">No lab reports or readings have been logged yet.</p>}</div></details>{notice && <p className="notice mt-4" role="status">{notice}</p>}</div>;
+}
+
 function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatients, updates, session, engine, setEngine, setUpdates, setNotice }: { role: "patient" | "caregiver"; patientId: string; linkedName: string; quickSummary: string; linkedPatients: LinkedPatient[]; updates: CareUpdate[]; session: Session; profile: Profile; engine: Engine; setEngine: (engine: Engine) => void; setUpdates: (value: CareUpdate[] | ((current: CareUpdate[]) => CareUpdate[])) => void; setNotice: (value: string) => void }) {
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState(false);
@@ -351,7 +415,7 @@ function PrivateUpdates({ role, patientId, linkedName, quickSummary, linkedPatie
   }
 
   return <div className="mt-8 grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
-    <section className="space-y-5"><div className="card p-6"><p className="eyebrow">{role === "caregiver" ? "Person in your care" : "Your quick summary"}</p><h2 className="mt-2 text-xl font-bold">{role === "caregiver" ? activeName : "Recent care context"}</h2>{role === "caregiver" && linkedPatients.length > 1 && <label className="mt-4 block"><span className="label">Choose a person</span><select className="field" value={activePatientId} onChange={(event) => setSelectedPatientId(event.target.value)}>{linkedPatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>}<p className="mt-3 leading-6 text-[#5d7078]">{activeQuickSummary || latestReportedChange(updates.find((item) => item.patient_id === activePatientId)) || "No care summary has been provided yet."}</p></div></section>
+    <section className="space-y-5">{role === "patient" ? <PatientTitleCard patientId={patientId} session={session} quickSummary={quickSummary} updates={updates} /> : <div className="card p-6"><p className="eyebrow">Person in your care</p><h2 className="mt-2 text-xl font-bold">{activeName}</h2>{linkedPatients.length > 1 && <label className="mt-4 block"><span className="label">Choose a person</span><select className="field" value={activePatientId} onChange={(event) => setSelectedPatientId(event.target.value)}>{linkedPatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>}<p className="mt-3 leading-6 text-[#5d7078]">{activeQuickSummary || latestReportedChange(updates.find((item) => item.patient_id === activePatientId)) || "No care summary has been provided yet."}</p></div>}</section>
     <section className="card p-6">
       {stage === "compose" && <form onSubmit={beginDraft}><p className="eyebrow">Share an update</p><h2 className="mt-2 text-2xl font-bold">What has changed today?</h2><p className="mt-2 text-[#5d7078]">Your original words remain available for review with the structured handover.</p><label className="mt-5 block"><span className="label">Care update</span><textarea className="field min-h-36" required maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Describe what has changed in your own words." /><span className="mt-2 block text-right text-xs text-[#5d7078]" aria-live="polite">{message.length.toLocaleString()} / 10,000 characters</span></label><VoiceInput disabled={busy} transcribe={transcribe} onTranscript={(transcript) => setMessage((current) => [current.trim(), transcript.trim()].filter(Boolean).join(current.trim() ? " " : "").slice(0, 10000))} />{role === "caregiver" && <Check value={priority} setValue={setPriority} label="Request a priority callback" />}<Check value={consent} setValue={setConsent} label="I consent to share this update with the care team" /><button type="submit" className="btn btn-primary mt-6" disabled={!canContinue || busy}>{busy ? "Preparing…" : "Share update"}</button></form>}
       {stage === "clarification" && draft && <ClarificationStep clarification={draft.clarification} busy={busy} answer={clarificationAnswer} setAnswer={setClarificationAnswer} onSkip={() => void share(draft)} onContinue={() => draft.clarification && void prepareDraft({ [draft.clarification.field]: clarificationAnswer })} />}

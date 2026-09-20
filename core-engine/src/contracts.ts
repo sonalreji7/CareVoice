@@ -40,6 +40,16 @@ export type UnavailableExtraction = {
 
 export type CareUpdateExtraction = Extraction | UnavailableExtraction;
 
+const patientSummaryLineSchema = z.string().min(1).max(2_000).nullable();
+
+export const patientExperienceSummarySchema = z.object({
+  recent_change: patientSummaryLineSchema,
+  impact_or_context: patientSummaryLineSchema,
+  help_or_report: patientSummaryLineSchema,
+});
+
+export type PatientExperienceSummary = z.infer<typeof patientExperienceSummarySchema>;
+
 export type PriorityInput = {
   authorRole: "patient" | "caregiver";
   caregiverRequestedCallback: boolean;
