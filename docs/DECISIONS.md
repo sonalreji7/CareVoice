@@ -8,13 +8,13 @@ The model is asked to select source-sentence IDs and allowed labels only. The se
 
 **Why:** fluent medical prose can sound credible even when it contains a missing negation, an invented fact, or an unjustified inference. A constrained selector makes the original language inspectable and lets the application reject output that cannot be grounded.
 
-**Trade-off:** the resulting handover is less polished than a generative summary. This is intentional: fidelity and reviewability matter more than elegant wording in this prototype.
+**Trade-off:** the resulting handover is less polished than a generative summary. This is intentional: fidelity and reviewability matter more than elegant wording in the deployed workflow.
 
 ## 2. No AI triage, diagnosis, or treatment
 
 CareVoice does not classify a user's condition as safe, urgent, severe, or emergent. It does not give treatment, medication, or emergency instructions.
 
-**Why:** a hackathon model cannot establish clinical validity, safe thresholds, monitoring responsibility, or escalation accountability. Claiming triage would create a dangerous mismatch between the interface and the evidence.
+**Why:** the application does not yet establish clinical validity, safe thresholds, monitoring responsibility, or escalation accountability. Claiming triage would create a dangerous mismatch between the interface and the evidence.
 
 **What exists instead:** a caregiver can request a priority callback, and one clearly documented, clinician-owned text rule can add a priority reason. Both are queue signals for human review—not medical determinations.
 
@@ -44,7 +44,7 @@ Clinician feedback such as “missing relevant detail” is stored separately fr
 
 **Limit:** it is not evidence that an AI model performed the classification. The separate OpenAI-backed mode and opt-in fictional evaluation exist to test that path.
 
-## What this prototype deliberately does not claim
+## What CareVoice deliberately does not claim
 
 - Clinical validation or medical-device certification
 - Emergency detection, triage, diagnosis, or prescription
@@ -53,4 +53,4 @@ Clinician feedback such as “missing relevant detail” is stored separately fr
 - Production-scale rate limiting, durable draft storage, or disaster recovery
 - Compliance with a particular healthcare law or deployment environment
 
-Those omissions are not hidden. They define the boundary between a reviewable hackathon prototype and a real clinical deployment.
+Those omissions are not hidden. They define the boundary between a reviewable care-communication application and a clinically validated deployment.

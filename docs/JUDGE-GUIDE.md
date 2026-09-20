@@ -1,6 +1,6 @@
 # CareVoice Relay: evaluator guide
 
-This guide lets a reviewer verify the core workflow from a fresh local setup using fictional data only. CareVoice Relay is a hackathon prototype, not a clinical service.
+This guide lets a reviewer verify the core workflow from a fresh local setup using fictional data only. CareVoice Relay is a deployed care-communication application; it is not a diagnostic, triage, or emergency service.
 
 ## What to assess
 

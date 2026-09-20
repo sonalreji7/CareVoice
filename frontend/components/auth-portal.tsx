@@ -31,7 +31,7 @@ type PatientExperienceSummary = { recent_change: string | null; impact_or_contex
 type PatientCareSnapshot = { summary: PatientExperienceSummary; summaryMode: "agent" | "unavailable"; updateCount: number };
 
 const caregiverPriorityReason = "Caregiver explicitly requested a priority callback.";
-const fictionalDemoUpdate = `This is a fictional hackathon demonstration, not a real care update.
+const fictionalDemoUpdate = `This is a fictional demonstration, not a real care update.
 
 Since yesterday morning, Fictional Maya has been much more tired than usual. She slept only for short periods overnight and has been resting in the chair for most of today. She says there is no new pain, but she feels uncomfortable when trying to move from the bed to the chair. She needed more help walking to the bathroom this morning and ate only a few bites of breakfast.
 

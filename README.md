@@ -2,7 +2,7 @@
 
 ## Overview
 
-CareVoice Relay is a hackathon prototype for structured, reviewable palliative-care handovers. Patients and caregivers share updates in their own words; assigned clinicians see a consistent, evidence-backed handover alongside the complete original message.
+CareVoice Relay is a deployed web application for structured, reviewable palliative-care handovers. Patients and caregivers share updates in their own words; assigned clinicians see a consistent, evidence-backed handover alongside the complete original message.
 
 It is **not** a diagnostic, treatment, medication, triage, or emergency service. The clinician remains the decision-maker.
 
@@ -30,7 +30,7 @@ The OpenAI-backed selector receives numbered source sentences and can return onl
 - Database-owned timestamps, immutable review events, and clinician handover-quality feedback kept separate from the original care update.
 - Fictional offline demo mode using deterministic exact-source tags, plus a separate OpenAI-backed extraction mode.
 
-The interface keeps persistent **Not an emergency service** and **Prototype only** notices. Voice input requires acknowledgement before recording, and the resulting text remains editable before sharing.
+The interface keeps persistent **Not an emergency service** and **Care coordination only** notices. Voice input requires acknowledgement before recording, and the resulting text remains editable before sharing.
 
 ## Tech Stack
 
@@ -38,17 +38,18 @@ The interface keeps persistent **Not an emergency service** and **Prototype only
 - **Backend:** Node.js, Express, TypeScript, a dedicated CareVoice core engine.
 - **Database:** Supabase PostgreSQL, Row Level Security, SQL migrations, server-owned RPCs.
 - **APIs / Services:** Supabase Auth, OpenAI Agents SDK for constrained source selection, OpenAI transcription API for optional voice input.
-- **Hosting / Deployment:** Local development workflow supplied; no production deployment is claimed for this prototype.
+- **Hosting / Deployment:** Frontend deployed on [Vercel](https://carevoice-frontend.vercel.app/); local development workflow is also supplied.
 - **Other Tools:** Zod schema validation, Node test runner, TypeScript, ESLint, Mermaid architecture diagrams, npm workspaces.
 
 ## Codex / OpenAI Usage
 
-Codex was used during the hackathon as a development collaborator for ideation, threat-modeling, architecture planning, implementation, debugging, test design, documentation, and the reviewer-facing repository structure.
+Codex was used as a development collaborator for ideation, threat-modeling, architecture planning, implementation, debugging, test design, documentation, and the reviewer-facing repository structure.
 
-OpenAI services are used in the application in two constrained ways:
+The organiser-provided OpenAI and Supabase services power the application. OpenAI services are used in two constrained ways:
 
 - The OpenAI Agents SDK selects only numbered source-sentence IDs and allowed tags for a handover. It is not allowed to diagnose, decide urgency, prescribe, or author clinician-facing prose.
 - The optional voice-input path uses OpenAI transcription to convert a recording into editable text before the caregiver reviews it.
+- Supabase provides authentication, PostgreSQL storage, Row Level Security, scoped patient assignments, and the trusted server-side RPCs used for protected care-update actions.
 
 The project also includes a clearly labelled deterministic fictional demo mode. This allows an evaluator to inspect the complete workflow without an API key; it is not represented as live AI processing.
 
@@ -56,15 +57,15 @@ The project also includes a clearly labelled deterministic fictional demo mode. 
 
 ### Live Demo
 
-No public deployment is currently provided. The reproducible fictional demo can be run locally using the steps below.
+The live application is available at **[carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/)**. A reproducible fictional demo can also be run locally using the steps below.
 
 ### Demo / Pitch Video
 
-No video is currently included. A short recording of the fictional caregiver-to-clinician flow is recommended before final submission: load the fictional plain-language update, show the source-backed review, confirm it, then show the assigned clinician queue and feedback flow.
+The live deployment above is the primary product demonstration. It supports the caregiver-to-clinician workflow described in this repository.
 
 ## Screenshots
 
-No screenshots are committed yet. Before submission, add only fictional-data screenshots that show:
+The live application can be viewed at [carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/). Any future repository screenshots should use fictional data and show:
 
 1. The caregiver's long, plain-language update.
 2. The review screen, including original words and the exact-source handover.
@@ -164,7 +165,7 @@ For the OpenAI-backed path, set `CAREVOICE_DEMO_MODE=0`, provide `OPENAI_API_KEY
 - **Clinician:** Reads only explicitly assigned patients’ updates; acknowledges and closes them through the trusted backend flow.
 - **Administrator:** Manages non-admin roles and caregiver/clinician assignments; cannot read care updates merely by being an administrator.
 
-### Fictional hackathon walkthrough
+### Fictional workflow walkthrough
 
 1. Sign in as the seeded fictional caregiver and select **Load detailed fictional update**.
 2. Select consent and **Request a priority callback**, then choose **Prepare review**.
@@ -197,4 +198,4 @@ npm run build
 
 The tests use fictional text only. Two opt-in tests—a live OpenAI selector evaluation and a dedicated Supabase RLS integration test—are skipped by default because they require separately configured test services. They are not presented as completed clinical validation.
 
-Before any real deployment, this prototype needs clinical governance, privacy and legal review, production rate limiting, security review, observability policy, incident procedures, backups, durable drafts, clinician notification policy, and live Supabase RLS acceptance tests. It does not claim clinical validation, medical safety certification, or production readiness.
+Before broader clinical deployment, CareVoice needs clinical governance, privacy and legal review, production-scale rate limiting, security review, observability policy, incident procedures, backups, durable drafts, clinician notification policy, and live Supabase RLS acceptance tests. It does not claim clinical validation or medical-device certification.
