@@ -65,11 +65,25 @@ The live deployment above is the primary product demonstration. It supports the 
 
 ## Screenshots
 
-The live application can be viewed at [carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/). Any future repository screenshots should use fictional data and show:
+The live application can be viewed at [carevoice-frontend.vercel.app](https://carevoice-frontend.vercel.app/). The following screenshots use fictional data only.
 
-1. The caregiver's long, plain-language update.
-2. The review screen, including original words and the exact-source handover.
-3. The clinician queue, lifecycle controls, and handover-quality feedback.
+### Secure, role-aware entry point
+
+![CareVoice Relay secure sign-in screen](docs/screenshots/01-secure-sign-in.png)
+
+The sign-in screen introduces the care-communication purpose and directs people to the appropriate emergency channel when needed.
+
+### Caregiver workspace
+
+![Caregiver workspace for a fictional patient](docs/screenshots/02-caregiver-workspace.png)
+
+Patients and caregivers can submit ordinary-language care updates, optionally use editable voice input, and explicitly consent before the handover is prepared.
+
+### Assigned clinician review queue
+
+![Clinician review queue with fictional care updates](docs/screenshots/03-clinician-review-queue.png)
+
+The clinician workspace prioritises review requests, preserves original words, displays the evidence-backed handover, and records handover-quality feedback.
 
 The architecture and data-processing diagrams below are included now so repository reviewers can understand the workflow without running the application.
 
